@@ -1,4 +1,5 @@
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
@@ -23,6 +24,7 @@ import { SpeakerPipeline } from "./pipeline.js";
 import { checkOllama } from "./mt-ollama.js";
 import { qualitySummary, resolveQuality } from "./quality.js";
 import { getSttLoadState, preloadAsr } from "./stt-local.js";
+import { listLanIpv4 } from "./lan.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load monorepo root .env
@@ -87,12 +89,23 @@ function broadcastServices(wss: WebSocketServer): void {
 }
 
 const server = http.createServer((req, res) => {
+  const cors = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+  };
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, cors);
+    res.end();
+    return;
+  }
+
   if (req.url === "/health") {
     void (async () => {
       // Refresh Ollama on health probes so UI can re-check without restart
       ollamaSnap = await checkOllama();
       const stt = getSttLoadState();
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(
         JSON.stringify({
           ok: true,
@@ -100,6 +113,7 @@ const server = http.createServer((req, res) => {
           arch: process.arch,
           node: process.version,
           quality: resolveQuality(),
+          lanIps: listLanIpv4(),
           ollama: ollamaSnap.ok,
           ollamaBase: ollamaSnap.base,
           ollamaModel: ollamaSnap.model,
@@ -113,7 +127,7 @@ const server = http.createServer((req, res) => {
     })();
     return;
   }
-  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.writeHead(200, { "Content-Type": "text/plain", ...cors });
   res.end("fonglish gateway\n");
 });
 
@@ -311,8 +325,33 @@ async function cleanup(state: SocketState): Promise<void> {
 server.listen(PORT, HOST, () => {
   console.log(`fonglish gateway on ws://${HOST}:${PORT}`);
   console.log(`platform: ${process.platform}/${process.arch} node ${process.version}`);
+  const lanIps = listLanIpv4();
+  if (lanIps.length > 0) {
+    console.log(`LAN: ${lanIps.map((ip) => `ws://${ip}:${PORT}`).join(", ")}`);
+    console.log(
+      `Remote peers: set Caption gateway to ws://<one-of-above> (not 127.0.0.1)`,
+    );
+  }
   resolveQuality();
   console.log(qualitySummary());
+  // Hint LAN IPs for Mac↔Windows invites
+  {
+    const lan: string[] = [];
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const n of list ?? []) {
+        const v4 = n.family === "IPv4" || (n.family as unknown) === 4;
+        if (v4 && !n.internal) lan.push(n.address);
+      }
+    }
+    if (lan.length) {
+      console.log(
+        `LAN join (other PCs): web http://${lan[0]}:3000  ·  gateway ws://${lan[0]}:${PORT}`,
+      );
+      console.log(
+        "Both Mac and Windows must use this LAN host — not 127.0.0.1 — or they never share a room.",
+      );
+    }
+  }
   if (process.platform === "win32") {
     console.log(
       "Windows: allow Node.js through the firewall for ports 8787 (gateway) and 3000 (web) if clients are on another machine.",

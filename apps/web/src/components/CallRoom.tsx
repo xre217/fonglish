@@ -10,7 +10,15 @@ import {
   type PeerInfo,
 } from "@fonglish/shared";
 import { CaptionClient } from "@/lib/caption-client";
-import { buildShareUrl } from "@/lib/gateway-url";
+import {
+  buildLanGatewayUrl,
+  buildShareUrl,
+  discoverLanIp,
+  isLoopbackHost,
+  isShareUrlLoopback,
+  loadShareHost,
+  saveShareHost,
+} from "@/lib/gateway-url";
 import { CallPeer, getMediaStream } from "@/lib/webrtc";
 import { CaptionOverlay, type CaptionLine } from "./CaptionOverlay";
 import { VideoStage } from "./VideoStage";
@@ -64,6 +72,8 @@ export function CallRoom({
   const [mtMs, setMtMs] = useState<number | null>(null);
   const [services, setServices] = useState<GatewayServices | null>(null);
   const [copyToast, setCopyToast] = useState(false);
+  const [lanHost, setLanHost] = useState(() => loadShareHost());
+  const [lanHint, setLanHint] = useState<string | null>(null);
 
   const clientRef = useRef<CaptionClient | null>(null);
   const callRef = useRef<CallPeer | null>(null);
@@ -71,7 +81,29 @@ export function CallRoom({
   const micLoopStop = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const shareUrl = useMemo(() => buildShareUrl(roomId), [roomId]);
+  const shareUrl = useMemo(
+    () => buildShareUrl(roomId, lanHost || null),
+    [roomId, lanHost],
+  );
+  const shareIsLoopback = isShareUrlLoopback(shareUrl);
+  const pageIsLoopback =
+    typeof window !== "undefined" && isLoopbackHost(window.location.hostname);
+
+  useEffect(() => {
+    if (!pageIsLoopback || lanHost) return;
+    let cancelled = false;
+    void discoverLanIp().then((ip) => {
+      if (cancelled || !ip) return;
+      setLanHost(ip);
+      saveShareHost(ip);
+      setLanHint(
+        `Detected LAN address ${ip}. Windows should open the share link below (not 127.0.0.1).`,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pageIsLoopback, lanHost]);
 
   const upsertCaption = useCallback((caption: CaptionEvent) => {
     setCaptions((prev) => {
@@ -242,6 +274,8 @@ export function CallRoom({
     setError(null);
   }, [speakLang, captionLang]);
 
+  const waitingForPeer = !remotePeer;
+
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
@@ -255,19 +289,29 @@ export function CallRoom({
     callRef.current?.setCamEnabled(!next);
   };
 
-  const copyLink = async () => {
+  const copyText = async (text: string) => {
     try {
       if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
+        await navigator.clipboard.writeText(text);
       } else {
-        // Windows / non-secure contexts: fallback select
-        window.prompt("Copy invite link:", shareUrl);
+        window.prompt("Copy:", text);
+        return;
       }
       setCopyToast(true);
       window.setTimeout(() => setCopyToast(false), 2000);
     } catch {
-      window.prompt("Copy invite link:", shareUrl);
+      window.prompt("Copy:", text);
     }
+  };
+
+  const copyLink = async () => {
+    if (lanHost) saveShareHost(lanHost);
+    await copyText(buildShareUrl(roomId, lanHost || null));
+  };
+
+  const copyGatewayUrl = async () => {
+    if (!lanHost) return;
+    await copyText(buildLanGatewayUrl(lanHost));
   };
 
   const statusKind = error
@@ -300,13 +344,14 @@ export function CallRoom({
   const showOllamaBad = services != null && !services.ollama;
   const showSttBad = services != null && (services.stt === "error" || services.stt === "unavailable");
   const hasAlerts = showSttLoading || showOllamaBad || showSttBad || !!error;
-  const waitingForPeer = !remotePeer;
+  const showLanPanel =
+    waitingForPeer && (shareIsLoopback || pageIsLoopback || !!lanHost);
 
   return (
     <div className="room">
       {copyToast && (
         <div className="toast" role="status">
-          Access link copied
+          Copied
         </div>
       )}
       <header className="room-header">
@@ -365,6 +410,80 @@ export function CallRoom({
           </a>
         </div>
       </header>
+
+      {(showLanPanel || lanHint) && (
+        <div className="banner info room-lan-banner" role="note">
+          <strong className="room-lan-title">Mac → Windows join</strong>
+          <p className="room-lan-lead">
+            Both machines must use your Mac&apos;s <strong>LAN IP</strong>, not{" "}
+            <code>127.0.0.1</code>. On the Mac run <code>npm run gateway</code>{" "}
+            and <code>npm run web</code>. Allow firewall ports{" "}
+            <strong>3000</strong> and <strong>8787</strong>.
+          </p>
+          <p className="room-lan-lead">
+            <strong>Camera error on Windows?</strong> Browsers block cam/mic on{" "}
+            <code>http://192.168…</code> (not a secure origin). In{" "}
+            <strong>Chrome or Edge</strong> open{" "}
+            <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>{" "}
+            (Edge: <code>edge://flags/…</code>), add{" "}
+            <code>
+              http://{lanHost || "YOUR_MAC_IP"}:3000
+            </code>
+            , set to <strong>Enabled</strong>, relaunch the browser, then reload
+            the session link.
+          </p>
+          <div className="field room-lan-field">
+            <label htmlFor="lan-host">Mac LAN IP</label>
+            <input
+              id="lan-host"
+              placeholder="192.168.1.67"
+              value={lanHost}
+              onChange={(e) => {
+                setLanHost(e.target.value.trim());
+                saveShareHost(e.target.value);
+              }}
+              spellCheck={false}
+              autoComplete="off"
+              aria-describedby="lan-join-hint"
+            />
+          </div>
+          {lanHost && (
+            <div className="room-lan-rows">
+              <div className="room-lan-row">
+                <span className="room-lan-label">Session link</span>
+                <code className="room-lan-value">{shareUrl}</code>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-compact"
+                  onClick={copyLink}
+                  aria-label="Copy session link for Windows"
+                >
+                  Copy
+                </button>
+              </div>
+              <div className="room-lan-row">
+                <span className="room-lan-label">Caption gateway</span>
+                <code className="room-lan-value">
+                  {buildLanGatewayUrl(lanHost)}
+                </code>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-compact"
+                  onClick={copyGatewayUrl}
+                  aria-label="Copy caption gateway URL for Windows"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          )}
+          <p id="lan-join-hint" className="field-hint">
+            On Windows: open the session link, then set Caption gateway in the
+            lobby to the value above.
+          </p>
+          {lanHint && <p className="field-hint">{lanHint}</p>}
+        </div>
+      )}
 
       {hasAlerts && (
         <div className="room-alerts">

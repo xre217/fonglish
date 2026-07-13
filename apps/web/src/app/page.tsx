@@ -1,15 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LANGUAGES, type LangCode } from "@fonglish/shared";
 import { randomId, roomPath } from "@/lib/ids";
 import {
   isHostedUi,
+  isLoopbackHost,
   loadGatewayUrlSetting,
   localWebBaseUrl,
   redirectHostedToLocalWeb,
   saveGatewayUrlSetting,
+  discoverLanIp,
+  buildLanGatewayUrl,
 } from "@/lib/gateway-url";
 
 const NAME_KEY = "fong_display_name";
@@ -33,7 +36,21 @@ export default function LobbyPage() {
   const [joinId, setJoinId] = useState("");
   const [gatewayUrl, setGatewayUrl] = useState(() => loadGatewayUrlSetting());
   const [hostedHint, setHostedHint] = useState<string | null>(null);
+  const [lanGatewayUrl, setLanGatewayUrl] = useState<string | null>(null);
   const hostedUi = useMemo(() => isHostedUi(), []);
+  const isLocalLobby = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      isLoopbackHost(window.location.hostname),
+    [],
+  );
+
+  useEffect(() => {
+    if (!isLocalLobby || hostedUi) return;
+    void discoverLanIp().then((ip) => {
+      if (ip) setLanGatewayUrl(buildLanGatewayUrl(ip));
+    });
+  }, [isLocalLobby, hostedUi]);
 
   const canStart = useMemo(
     () => displayName.trim().length >= 1,
@@ -112,6 +129,18 @@ export default function LobbyPage() {
           {hostedHint && (
             <div className="banner warn lobby-hosted-banner" role="alert">
               {hostedHint}
+            </div>
+          )}
+
+          {!hostedUi && isLocalLobby && lanGatewayUrl && (
+            <div className="banner info lobby-lan-banner" role="note">
+              <strong className="lobby-hosted-title">Hosting for another device?</strong>
+              <p className="lobby-hosted-body">
+                This Mac runs the gateway. A Windows (or other) peer must set{" "}
+                <strong>Caption gateway</strong> to{" "}
+                <code>{lanGatewayUrl}</code> in the lobby —{" "}
+                <code>127.0.0.1</code> only works on this machine.
+              </p>
             </div>
           )}
 

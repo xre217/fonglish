@@ -128,23 +128,71 @@ export class CallPeer {
   }
 }
 
+/**
+ * Cam/mic access. Requires a secure context:
+ * https://, http://localhost, or http://127.0.0.1
+ * Plain http://192.168.x.x is NOT secure → mediaDevices is undefined.
+ */
 export async function getMediaStream(opts?: {
   video?: boolean;
   audio?: boolean;
 }): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-    video:
-      opts?.video === false
-        ? false
-        : {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            facingMode: "user",
-          },
-  });
+  if (typeof window === "undefined") {
+    throw new Error("Camera/mic only available in the browser.");
+  }
+
+  const host = window.location.hostname;
+  const secure = window.isSecureContext;
+  const devices = navigator.mediaDevices;
+
+  if (!devices || typeof devices.getUserMedia !== "function") {
+    const isLanHttp =
+      window.location.protocol === "http:" &&
+      host !== "localhost" &&
+      host !== "127.0.0.1" &&
+      host !== "[::1]";
+
+    if (isLanHttp || !secure) {
+      throw new Error(
+        `Camera/mic blocked: browsers only allow getUserMedia on HTTPS or localhost — not on http://${host}. ` +
+          `Fix (pick one): (1) On both PCs use Chrome flag “Insecure origins treated as secure” and add ` +
+          `http://${host}:3000  then relaunch Chrome. ` +
+          `(2) Or open http://127.0.0.1:3000 only for same-machine tests. ` +
+          `(3) Or use a tunnel with real HTTPS (e.g. Cloudflare Tunnel).`,
+      );
+    }
+    throw new Error(
+      "Camera/mic API unavailable. Use Chrome/Edge and allow media permissions.",
+    );
+  }
+
+  try {
+    return await devices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video:
+        opts?.video === false
+          ? false
+          : {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: "user",
+            },
+    });
+  } catch (err) {
+    const name = err instanceof DOMException ? err.name : "";
+    const msg = err instanceof Error ? err.message : String(err);
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+      throw new Error(
+        "Camera/mic permission denied. Click the lock icon in the address bar and allow access, then reload.",
+      );
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+      throw new Error("No camera or microphone found on this device.");
+    }
+    throw new Error(msg || "Could not access camera/microphone.");
+  }
 }
