@@ -1,13 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { isLangCode, type LangCode } from "@fonglish/shared";
 import { CallRoom } from "@/components/CallRoom";
-import { randomId } from "@/lib/ids";
+import { randomId, roomPath } from "@/lib/ids";
+import { redirectHostedToLocalWeb } from "@/lib/gateway-url";
 
 export function RoomClient({ roomId }: { roomId: string }) {
   const search = useSearchParams();
+
+  useEffect(() => {
+    const qs = window.location.search;
+    redirectHostedToLocalWeb(`${roomPath(roomId)}${qs}`);
+  }, [roomId]);
 
   const displayName = search.get("name")?.trim() || "Guest";
   const speakRaw = search.get("speak") ?? "en";
