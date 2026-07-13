@@ -32,10 +32,12 @@ export class SpeakerPipeline {
   private pendingPcm: Buffer[] = [];
   private static readonly MAX_PENDING = 80; // ~8s at 100ms chunks
   /**
-   * When true, client is feeding browser SpeechRecognition text — skip Whisper PCM
-   * so we don't emit duplicate captions for the same utterance.
+   * When browser SpeechRecognition recently delivered text, skip Whisper PCM briefly
+   * so we don't emit duplicate captions. Expires so Windows can fall back to Whisper
+   * if browser speech dies mid-call.
    */
   private preferBrowserStt = false;
+  private lastBrowserSttAt = 0;
 
   constructor(
     private room: Room,
@@ -101,8 +103,13 @@ export class SpeakerPipeline {
 
   pushPcm(pcm: Buffer): void {
     if (this.closed || this.peer.muted) return;
-    // Browser SpeechRecognition is preferred when active — ignore PCM to avoid double captions.
-    if (this.preferBrowserStt) return;
+    // If browser speech recently delivered text, skip Whisper to avoid doubles.
+    if (
+      this.preferBrowserStt &&
+      Date.now() - this.lastBrowserSttAt < 4000
+    ) {
+      return;
+    }
     if (this.stt) {
       this.stt.sendPcm(pcm);
       return;
@@ -124,7 +131,8 @@ export class SpeakerPipeline {
     const cleaned = text.replace(/\s+/g, " ").trim();
     if (!cleaned) return;
     this.preferBrowserStt = true;
-    this.pendingPcm = []; // drop buffered PCM — browser path won
+    this.lastBrowserSttAt = Date.now();
+    this.pendingPcm = [];
     console.log(
       `[stt] browser-text ${isFinal ? "final" : "partial"} for ${this.peer.displayName}: ${cleaned.slice(0, 100)}`,
     );

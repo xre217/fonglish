@@ -114,19 +114,32 @@ export class BrowserSpeechSource {
       };
 
       rec.onerror = (ev) => {
+        // Windows Chrome often fires network / audio-capture / no-speech —
+        // do not treat those as fatal; Whisper PCM remains the main path.
         if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
           this.handlers.onError?.(
-            "Browser speech permission blocked — allow microphone for captions.",
+            "Browser speech permission blocked — captions still use the host Whisper path.",
           );
-        } else if (ev.error === "network") {
-          this.handlers.onError?.(
-            "Browser speech needs network (Chrome speech service).",
-          );
+          this.stopped = true;
+          return;
         }
+        if (ev.error === "audio-capture") {
+          // Mic busy (common on Windows with WebRTC) — stop trying SR
+          this.stopped = true;
+          console.warn("[browser-speech] audio-capture — mic busy, using Whisper only");
+          return;
+        }
+        if (ev.error === "network") {
+          this.stopped = true;
+          console.warn("[browser-speech] network — using Whisper only");
+          return;
+        }
+        // aborted / no-speech: ignore (onend will restart if still running)
       };
 
       rec.onend = () => {
         if (this.stopped) return;
+        // Back off a bit on Windows to avoid thrashing the audio device
         this.restartTimer = setTimeout(() => {
           if (this.stopped || !this.rec) return;
           try {
@@ -134,7 +147,7 @@ export class BrowserSpeechSource {
           } catch {
             /* already started */
           }
-        }, 250);
+        }, 600);
       };
 
       this.rec = rec;

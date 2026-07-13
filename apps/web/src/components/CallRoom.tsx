@@ -274,42 +274,14 @@ export function CallRoom({
           },
         });
 
-        // Prefer Chrome/Edge Web Speech for captions (reliable). Whisper PCM is fallback.
-        const canBrowser = browserSpeechSupported();
-        useBrowserSttRef.current = canBrowser;
-        if (canBrowser) {
-          const speech = new BrowserSpeechSource(initialSpeak, {
-            onText: (text, isFinal) => {
-              if (!joinedRef.current || !client.ready || mutedRef.current) return;
-              client.sendSttText(text, isFinal, "browser");
-              pcmCountRef.current += 1;
-              setPcmSent(pcmCountRef.current);
-              setMicLevel((v) => Math.max(v, 0.35));
-            },
-            onStart: () => setCaptionEngine("browser"),
-            onError: (message) => {
-              // Fall back to Whisper PCM if browser speech is blocked
-              console.warn("[browser-speech]", message);
-              if (!useBrowserSttRef.current) return;
-              useBrowserSttRef.current = false;
-              setCaptionEngine("whisper");
-              setError(message);
-            },
-          });
-          speechRef.current = speech;
-          const ok = speech.start();
-          if (ok) {
-            setCaptionEngine("browser");
-          } else {
-            useBrowserSttRef.current = false;
-            setCaptionEngine("whisper");
-          }
-        } else {
-          setCaptionEngine("whisper");
-        }
+        // Caption STT strategy (Windows-safe):
+        // 1) Always stream PCM → Mac Whisper (local). Never gate this on browser speech.
+        // 2) Optionally layer Chrome Web Speech — only "wins" after it produces text.
+        //    Starting SpeechRecognition exclusively on Windows often steals the mic
+        //    and yields nothing (network / audio-capture errors).
+        useBrowserSttRef.current = false;
+        setCaptionEngine("whisper");
 
-        // Always also stream PCM for Whisper when browser speech is unavailable,
-        // or as backup energy meter. When browser STT is active, gateway ignores PCM.
         const mic = new BrowserMicSource(async () => stream);
         micSourceRef.current = mic;
         (async () => {
@@ -322,7 +294,7 @@ export function CallRoom({
                 setMicLevel(mic.peak);
               }
               if (!joinedRef.current || !client.ready || mutedRef.current) continue;
-              // Only push PCM to Whisper when not using browser speech
+              // Keep feeding Whisper unless browser speech has proven it works
               if (!useBrowserSttRef.current) {
                 client.sendPcm(chunk.pcm);
                 pcmCountRef.current += 1;
@@ -332,16 +304,54 @@ export function CallRoom({
           } catch (err) {
             if (!cancelled) {
               console.error(err);
-              if (!useBrowserSttRef.current) {
-                setError(
-                  err instanceof Error
-                    ? err.message
-                    : "Mic capture for captions failed",
-                );
-              }
+              setError(
+                err instanceof Error
+                  ? err.message
+                  : "Mic capture for captions failed",
+              );
             }
           }
         })();
+
+        // Delay browser speech so getUserMedia / WebRTC can claim the mic first.
+        // Only switch off Whisper after the first successful transcript.
+        if (browserSpeechSupported()) {
+          window.setTimeout(() => {
+            if (cancelled || micLoopStop.current) return;
+            const speech = new BrowserSpeechSource(initialSpeak, {
+              onText: (text, isFinal) => {
+                if (!joinedRef.current || !client.ready || mutedRef.current) {
+                  return;
+                }
+                // First success → prefer browser path (gateway will too)
+                if (!useBrowserSttRef.current) {
+                  useBrowserSttRef.current = true;
+                  setCaptionEngine("browser");
+                  console.info("[captions] browser speech active");
+                }
+                client.sendSttText(text, isFinal, "browser");
+                pcmCountRef.current += 1;
+                setPcmSent(pcmCountRef.current);
+                setMicLevel((v) => Math.max(v, 0.35));
+              },
+              onStart: () => {
+                /* stay on whisper until first text */
+              },
+              onError: (message) => {
+                // Stay on Whisper — do not block PCM
+                console.warn("[browser-speech]", message);
+                useBrowserSttRef.current = false;
+                setCaptionEngine("whisper");
+                // Don't surface soft network errors as fatal banners
+                if (/permission|blocked|not-allowed/i.test(message)) {
+                  setError(message);
+                }
+              },
+            });
+            speechRef.current = speech;
+            speech.start();
+          }, 1200);
+        }
       } catch (err) {
         setError(
           err instanceof Error
