@@ -228,24 +228,35 @@ export function CallRoom({
     try {
       await navigator.clipboard.writeText(shareUrl);
       setStatus("Invite link copied");
+      setTimeout(() => setStatus(remotePeer ? "Connected" : "Waiting for peer…"), 2000);
     } catch {
       setError("Could not copy link");
     }
   };
 
+  const statusKind = error
+    ? "error"
+    : status === "Connected"
+      ? "connected"
+      : "waiting";
+
   return (
     <div className="room">
-      <header className="top">
+      <header className="room-header">
         <div>
-          <div className="brand">Fonglish</div>
-          <div className="muted small">
-            Room <code>{roomId}</code> · {status}
-            {mtMs != null && ` · MT ${mtMs}ms`}
+          <div className="room-brand">Fonglish</div>
+          <div className="room-meta muted">
+            <code className="room-id">{roomId}</code>
+            <span className={`status-pill ${statusKind}`}>
+              <span className="status-dot" />
+              {status}
+            </span>
+            {mtMs != null && <span>MT {mtMs}ms</span>}
           </div>
         </div>
-        <div className="actions">
+        <div className="room-actions">
           <button type="button" className="btn btn-ghost" onClick={copyLink}>
-            Copy invite link
+            Copy invite
           </button>
           <a className="btn btn-ghost" href="/">
             Leave
@@ -254,8 +265,8 @@ export function CallRoom({
       </header>
 
       <div className="banner">
-        This call is transcribed and translated in real time. Audio is streamed to
-        the caption gateway (xAI STT + Grok). Nothing is stored by this MVP.
+        This call is transcribed and translated in real time. Audio is sent to the
+        caption gateway for processing. Nothing is stored.
       </div>
 
       {error && (
@@ -280,14 +291,26 @@ export function CallRoom({
       />
 
       <div className="toolbar card">
-        <div className="controls">
-          <button type="button" className="btn btn-ghost" onClick={toggleMute}>
-            {muted ? "Unmute" : "Mute"}
+        <div className="toolbar-controls">
+          <button
+            type="button"
+            className={`btn btn-ghost btn-icon${muted ? " active" : ""}`}
+            onClick={toggleMute}
+            title={muted ? "Unmute" : "Mute"}
+            aria-label={muted ? "Unmute microphone" : "Mute microphone"}
+          >
+            {muted ? "🔇" : "🎤"}
           </button>
-          <button type="button" className="btn btn-ghost" onClick={toggleCam}>
-            {camOff ? "Camera on" : "Camera off"}
+          <button
+            type="button"
+            className={`btn btn-ghost btn-icon${camOff ? " active" : ""}`}
+            onClick={toggleCam}
+            title={camOff ? "Turn camera on" : "Turn camera off"}
+            aria-label={camOff ? "Turn camera on" : "Turn camera off"}
+          >
+            {camOff ? "📷" : "🎥"}
           </button>
-          <label className="check">
+          <label className="check-label">
             <input
               type="checkbox"
               checked={showOriginal}
@@ -296,7 +319,7 @@ export function CallRoom({
             Show original
           </label>
         </div>
-        <div className="langs">
+        <div className="toolbar-langs">
           <div className="field">
             <label htmlFor="speak">I speak</label>
             <select
@@ -327,70 +350,6 @@ export function CallRoom({
           </div>
         </div>
       </div>
-
-      <style jsx>{`
-        .room {
-          width: min(1100px, calc(100% - 2rem));
-          margin: 1.25rem auto 2rem;
-          display: flex;
-          flex-direction: column;
-          gap: 0.9rem;
-        }
-        .top {
-          display: flex;
-          justify-content: space-between;
-          gap: 1rem;
-          align-items: flex-start;
-          flex-wrap: wrap;
-        }
-        .brand {
-          font-weight: 800;
-          letter-spacing: -0.02em;
-          font-size: 1.25rem;
-        }
-        .small {
-          font-size: 0.88rem;
-          margin-top: 0.2rem;
-        }
-        .actions {
-          display: flex;
-          gap: 0.5rem;
-          flex-wrap: wrap;
-        }
-        .toolbar {
-          display: flex;
-          justify-content: space-between;
-          gap: 1rem;
-          padding: 0.9rem 1rem;
-          flex-wrap: wrap;
-          align-items: end;
-        }
-        .controls {
-          display: flex;
-          gap: 0.55rem;
-          align-items: center;
-          flex-wrap: wrap;
-        }
-        .langs {
-          display: flex;
-          gap: 0.75rem;
-          flex-wrap: wrap;
-        }
-        .langs .field {
-          min-width: 140px;
-        }
-        .check {
-          display: flex;
-          gap: 0.4rem;
-          align-items: center;
-          color: #93a0c2;
-          font-size: 0.9rem;
-        }
-        code {
-          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-          font-size: 0.85em;
-        }
-      `}</style>
     </div>
   );
 }

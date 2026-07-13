@@ -18,6 +18,7 @@ import {
   type RoomPeer,
 } from "./rooms.js";
 import { SpeakerPipeline } from "./pipeline.js";
+import { checkOllama } from "./mt-ollama.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load monorepo root .env
@@ -35,8 +36,19 @@ type SocketState = {
 
 const server = http.createServer((req, res) => {
   if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, hasKey: Boolean(process.env.XAI_API_KEY) }));
+    void (async () => {
+      const ollama = await checkOllama();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          ollama: ollama.ok,
+          ollamaBase: ollama.base,
+          ollamaModel: ollama.model,
+          ollamaError: ollama.error,
+        }),
+      );
+    })();
     return;
   }
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -235,9 +247,15 @@ async function cleanup(state: SocketState): Promise<void> {
 
 server.listen(PORT, HOST, () => {
   console.log(`fonglish gateway on ws://${HOST}:${PORT}`);
-  console.log(
-    process.env.XAI_API_KEY
-      ? "XAI_API_KEY: set"
-      : "XAI_API_KEY: MISSING — STT/MT will fail until set in .env",
-  );
+  void checkOllama().then((o) => {
+    if (o.ok) {
+      console.log(`Ollama: ok (${o.base}, model ${o.model})`);
+    } else {
+      console.warn(
+        `Ollama: NOT READY (${o.base}, model ${o.model}) — ${o.error ?? "unknown"}`,
+      );
+      console.warn("Start Ollama and pull the model, e.g. `ollama pull llama3.2:3b`");
+    }
+  });
+  console.log("STT: local Whisper (Transformers.js) — first run downloads the model");
 });

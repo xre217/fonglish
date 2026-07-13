@@ -119,7 +119,7 @@ export type PeerInfo = {
   muted: boolean;
 };
 
-/** Audio constants aligned with xAI STT streaming defaults. */
+/** Audio constants for PCM capture (16 kHz mono — Whisper-friendly). */
 export const AUDIO = {
   sampleRate: 16000,
   channels: 1 as const,

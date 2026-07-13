@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { LangCode } from "@fonglish/shared";
 import type { CaptionEvent } from "@fonglish/shared";
-import { translateText } from "./mt-xai.js";
-import { XaiSttSession } from "./stt-xai.js";
+import { translateText } from "./mt-ollama.js";
+import { LocalSttSession } from "./stt-local.js";
 import type { Room, RoomPeer } from "./rooms.js";
 import { broadcastCaption, send } from "./rooms.js";
 
@@ -12,7 +12,7 @@ import { broadcastCaption, send } from "./rooms.js";
  * translated into each viewer's captionLang.
  */
 export class SpeakerPipeline {
-  private stt: XaiSttSession | null = null;
+  private stt: LocalSttSession | null = null;
   private utteranceId = randomUUID();
   private lastPartialText = "";
   private partialMtTimer: ReturnType<typeof setTimeout> | null = null;
@@ -31,7 +31,7 @@ export class SpeakerPipeline {
     if (this.connecting) return this.connecting;
 
     this.connecting = (async () => {
-      const session = new XaiSttSession(this.peer.speakLang, {
+      const session = new LocalSttSession(this.peer.speakLang, {
         onPartial: (p) => {
           void this.handleStt(p.text, p.isFinal, p.speechFinal);
         },
@@ -44,7 +44,9 @@ export class SpeakerPipeline {
           console.warn(`[stt] ${this.peer.peerId}: ${message}`);
         },
         onReady: () => {
-          console.log(`[stt] ready for ${this.peer.displayName} (${this.peer.speakLang})`);
+          console.log(
+            `[stt] ready for ${this.peer.displayName} (${this.peer.speakLang})`,
+          );
         },
       });
       try {
@@ -75,7 +77,6 @@ export class SpeakerPipeline {
   }
 
   updateLangs(speakLang: LangCode, _captionLang: LangCode): void {
-    // Restart STT if speak language changed
     if (speakLang !== this.peer.speakLang) {
       void this.restartStt(speakLang);
     }
@@ -100,7 +101,6 @@ export class SpeakerPipeline {
     this.lastPartialText = text;
 
     if (!finalUtterance) {
-      // Debounce partial MT (~700ms)
       if (this.partialMtTimer) clearTimeout(this.partialMtTimer);
       this.partialMtTimer = setTimeout(() => {
         void this.emitCaptions(text, false);
@@ -121,19 +121,20 @@ export class SpeakerPipeline {
     }
   }
 
-  private async emitCaptions(sourceText: string, isFinal: boolean): Promise<void> {
+  private async emitCaptions(
+    sourceText: string,
+    isFinal: boolean,
+  ): Promise<void> {
     const sourceLang = this.peer.speakLang;
     const speakerId = this.peer.peerId;
     const speakerName = this.peer.displayName;
     const utteranceId = this.utteranceId;
     const ts = Date.now();
 
-    // Collect unique target langs among room peers
     const targets = new Set<LangCode>();
     for (const p of this.room.peers.values()) {
       targets.add(p.captionLang);
     }
-    // Always include same-language path
     targets.add(sourceLang);
 
     const translations = new Map<LangCode, string>();
@@ -144,12 +145,15 @@ export class SpeakerPipeline {
     await Promise.all(
       [...targets].map(async (targetLang) => {
         if (targetLang === sourceLang) return;
-        // Skip thrashing partial MT more than once per 1.2s per target
         if (!isFinal && Date.now() - this.lastPartialMtAt < 1200) {
           return;
         }
         try {
-          const { text, ms } = await translateText(sourceText, sourceLang, targetLang);
+          const { text, ms } = await translateText(
+            sourceText,
+            sourceLang,
+            targetLang,
+          );
           translations.set(targetLang, text);
           mtTimings.push(ms);
         } catch (err) {
@@ -168,7 +172,9 @@ export class SpeakerPipeline {
     if (!isFinal) this.lastPartialMtAt = Date.now();
 
     if (mtTimings.length > 0) {
-      const avg = Math.round(mtTimings.reduce((a, b) => a + b, 0) / mtTimings.length);
+      const avg = Math.round(
+        mtTimings.reduce((a, b) => a + b, 0) / mtTimings.length,
+      );
       send(this.peer.ws, { type: "stats", mtMs: avg });
       console.log(`[mt] ${avg}ms | ${sourceLang} → ${[...targets].join(",")}`);
     }

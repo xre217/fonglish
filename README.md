@@ -4,16 +4,24 @@ Real-time **bilingual subtitles** for 1:1 video calls.
 
 - Browser **WebRTC** call (camera + mic)
 - Each speaker streams **their own mic** to a Node **caption gateway**
-- **xAI Speech-to-Text** (streaming) → **Grok translation** → live captions
+- **Local Whisper STT** (energy VAD + Transformers.js) → **Ollama translation** → live captions
 - Designed so a later **Zoom/Meet companion** can reuse the same gateway by swapping only the audio source
+
+## Prerequisites
+
+1. [Ollama](https://ollama.com) running locally
+2. A chat model pulled, e.g.:
+
+```bash
+ollama pull llama3.2:3b
+```
 
 ## Quick start
 
 ```bash
-cd /Users/trefong/Projects/fonglish
+cd /Users/trefong/fonglish
 cp .env.example .env
-# put your key in .env:
-# XAI_API_KEY=xai-...
+# defaults point at local Ollama — no API key needed
 
 npm install
 
@@ -31,6 +39,8 @@ Open http://localhost:3000 in two browser profiles (or two machines).
 3. Allow camera/mic
 4. Speak — captions appear under the video, translated into each person’s **Captions in** language
 
+> First STT utterance downloads the Whisper ONNX model (~75MB) into the transformers cache. First MT call loads the Ollama model into memory.
+
 ## Architecture
 
 ```
@@ -38,7 +48,7 @@ Browser A ──WebRTC A/V── Browser B
    │ mic PCM                    │ mic PCM
    └──────────► Gateway ◄───────┘
                   │
-          xAI STT stream + Grok MT
+     local Whisper STT + Ollama MT
                   │
             CaptionEvent (WS)
 ```
@@ -69,12 +79,11 @@ Gateway protocol stays the same: binary PCM frames in → `caption` events out.
 
 | Variable | Default | Notes |
 |----------|---------|--------|
-| `XAI_API_KEY` | — | Required for STT + translation |
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP API |
+| `OLLAMA_MT_MODEL` | `llama3.2:3b` | Translation model (`ollama pull …`) |
+| `WHISPER_MODEL` | `Xenova/whisper-tiny` | Local ASR via Transformers.js |
 | `GATEWAY_PORT` | `8787` | Caption gateway |
 | `NEXT_PUBLIC_GATEWAY_URL` | `ws://localhost:8787` | Browser WS URL |
-| `XAI_MT_MODEL` | `grok-4.5` | Translation model |
-
-Get a key: https://console.x.ai
 
 ## Protocol (summary)
 
@@ -84,7 +93,7 @@ Gateway → client: `welcome`, `peer_joined`, `peer_left`, `signal`, `caption`, 
 
 ## Privacy note
 
-This MVP streams call audio to xAI for transcription and sends utterance text to Grok for translation. A consent banner is shown in-call. No server-side transcript store is implemented.
+This MVP runs **STT and translation on your machine** (Whisper ONNX + Ollama). Mic PCM is sent only to the local caption gateway. A consent banner is shown in-call. No server-side transcript store is implemented.
 
 ## Out of scope (v1)
 
@@ -98,7 +107,9 @@ This MVP streams call audio to xAI for transcription and sends utterance text to
 | Symptom | Check |
 |---------|--------|
 | “WebSocket error” | Gateway running? `curl http://localhost:8787/health` |
-| No captions | `XAI_API_KEY` set? Gateway logs show `[stt] ready`? Mic unmuted? |
+| No captions | Ollama running? `curl http://localhost:11434/api/tags` — model pulled? Gateway logs show `[stt] ready`? Mic unmuted? |
+| MT errors | `OLLAMA_MT_MODEL` matches a pulled model? Try `ollama run llama3.2:3b` |
+| Slow first caption | Whisper model downloading; subsequent utterances are faster |
 | No remote video | Allow camera; try same Wi‑Fi; check browser console for ICE errors |
 | Room full | v1 is 1:1 — only two peers per room |
 

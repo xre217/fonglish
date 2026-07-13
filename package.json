@@ -2,7 +2,7 @@
   "name": "fonglish",
   "version": "0.1.0",
   "private": true,
-  "description": "Fonglish — real-time video call translation with live bilingual subtitles (WebRTC + xAI STT/MT)",
+  "description": "Fonglish — real-time video call translation with live bilingual subtitles (WebRTC + local Whisper STT + Ollama MT)",
   "workspaces": [
     "apps/*",
     "packages/*"

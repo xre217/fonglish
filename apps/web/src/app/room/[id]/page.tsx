@@ -11,7 +11,7 @@ export default async function RoomPage({
 
   if (!roomId) {
     return (
-      <main className="container" style={{ padding: "2rem 0" }}>
+      <main className="container lobby">
         <p>Missing room id.</p>
       </main>
     );
@@ -20,7 +20,7 @@ export default async function RoomPage({
   return (
     <Suspense
       fallback={
-        <main className="container" style={{ padding: "2rem 0" }}>
+        <main className="container lobby">
           <p className="muted">Loading room…</p>
         </main>
       }

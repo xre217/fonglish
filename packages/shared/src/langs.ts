@@ -14,7 +14,7 @@ export type LangOption = {
   nativeLabel: string;
 };
 
-/** Languages we surface in the UI (subset of xAI STT languages). */
+/** Languages we surface in the UI (Whisper / Ollama-friendly set). */
 export const LANGUAGES: LangOption[] = [
   { code: "en", label: "English", nativeLabel: "English" },
   { code: "es", label: "Spanish", nativeLabel: "Español" },
