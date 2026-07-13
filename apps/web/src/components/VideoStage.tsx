@@ -13,18 +13,24 @@ type Props = {
 
 function VideoTile({
   stream,
-  label,
+  name,
+  role,
   muted,
   mirror,
   placeholder,
   pip,
+  showMuted,
+  showCamOff,
 }: {
   stream: MediaStream | null;
-  label: string;
+  name: string;
+  role: "you" | "peer";
   muted?: boolean;
   mirror?: boolean;
   placeholder: string;
   pip?: boolean;
+  showMuted?: boolean;
+  showCamOff?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
 
@@ -35,7 +41,15 @@ function VideoTile({
   }, [stream]);
 
   return (
-    <div className={`video-tile${pip ? " pip" : ""}`}>
+    <div
+      className={[
+        "video-tile",
+        pip ? "pip" : "",
+        role === "you" ? "local" : "remote-tile",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <video
         ref={ref}
         autoPlay
@@ -44,7 +58,18 @@ function VideoTile({
         className={mirror ? "mirror" : undefined}
       />
       {!stream && <div className="placeholder">{placeholder}</div>}
-      <div className="label">{label}</div>
+      <div className="video-label">
+        <span className={`video-role${role === "you" ? " you" : ""}`}>
+          {role === "you" ? "You" : "Peer"}
+        </span>
+        <span className="video-name">{name}</span>
+        {(showMuted || showCamOff) && (
+          <span className="video-badges">
+            {showMuted && <span className="video-badge off">Mic off</span>}
+            {showCamOff && <span className="video-badge off">Cam off</span>}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -61,16 +86,20 @@ export function VideoStage({
     <div className="video-stage">
       <VideoTile
         stream={remoteStream}
-        label={remoteName ?? "Waiting for peer…"}
+        name={remoteName ?? "Waiting…"}
+        role="peer"
         placeholder="Share the invite link to start the call"
       />
       <VideoTile
         stream={camOff ? null : localStream}
-        label={`${localName}${muted ? " · muted" : ""}`}
+        name={localName}
+        role="you"
         muted
         mirror
         pip
-        placeholder="Camera off"
+        showMuted={muted}
+        showCamOff={camOff}
+        placeholder="Camera is off"
       />
     </div>
   );

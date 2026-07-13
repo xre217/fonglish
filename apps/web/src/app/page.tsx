@@ -50,10 +50,10 @@ export default function LobbyPage() {
     <main className="container lobby">
       <div className="lobby-inner">
         <p className="lobby-eyebrow">Fonglish</p>
-        <h1 className="lobby-title">Live bilingual subtitles for 1:1 calls</h1>
+        <h1 className="lobby-title">Live bilingual subtitles</h1>
         <p className="lobby-lead muted">
-          Start a video call with real-time translated captions. Each person sees
-          subtitles in their own language.
+          1:1 video calls with real-time captions — each person reads subtitles
+          in their own language.
         </p>
 
         <div className="card lobby-card">
@@ -138,9 +138,10 @@ export default function LobbyPage() {
           </div>
         </div>
 
-        <p className="lobby-hint muted">
-          Requires <code>npm run gateway</code>, <code>npm run web</code>, and a
-          running Ollama instance. Open in two browser windows to try a call.
+        <p className="lobby-note">
+          Local gateway — Whisper STT + Ollama MT. Run{" "}
+          <code>npm run gateway</code> and <code>npm run web</code>, then open
+          two browser windows.
         </p>
       </div>
     </main>

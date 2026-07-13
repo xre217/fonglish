@@ -306,32 +306,42 @@ export function CallRoom({
         <div className="room-header-main">
           <div className="room-brand">Fonglish</div>
           <div className="room-meta muted">
-            <code className="room-id">{roomId}</code>
-            <span
-              className={`status-pill ${statusKind}`}
-              title={status}
-              aria-label={`Call status: ${status}`}
-            >
-              <span className="status-dot" aria-hidden />
-              <span className="status-label">{statusLabel}</span>
-            </span>
-            <span
-              className={servicePillClass(sttK)}
-              title={sttTitle}
-              aria-label={sttTitle}
-            >
-              STT
-            </span>
-            <span
-              className={servicePillClass(ollamaK)}
-              title={ollamaTitle}
-              aria-label={ollamaTitle}
-            >
-              MT
-            </span>
-            <span className="room-stat" aria-hidden={mtMs == null}>
-              {mtMs != null ? `${mtMs}ms` : "—"}
-            </span>
+            <div className="room-meta-row">
+              <code className="room-id" title={roomId}>
+                {roomId}
+              </code>
+              <span
+                className={`status-pill ${statusKind}`}
+                title={status}
+                aria-label={`Call status: ${status}`}
+              >
+                <span className="status-dot" aria-hidden />
+                <span className="status-label">{statusLabel}</span>
+              </span>
+            </div>
+            <div className="room-meta-row room-meta-services">
+              <span
+                className={servicePillClass(sttK)}
+                title={sttTitle}
+                aria-label={sttTitle}
+              >
+                STT
+              </span>
+              <span
+                className={servicePillClass(ollamaK)}
+                title={ollamaTitle}
+                aria-label={ollamaTitle}
+              >
+                MT
+              </span>
+              <span
+                className="room-stat"
+                title={mtMs != null ? `Translation latency ${mtMs}ms` : "Translation latency"}
+                aria-label={mtMs != null ? `${mtMs} ms` : "No latency yet"}
+              >
+                {mtMs != null ? `${mtMs}ms` : "—"}
+              </span>
+            </div>
           </div>
         </div>
         <div className="room-actions">
@@ -345,7 +355,7 @@ export function CallRoom({
       </header>
 
       <p className="consent-note">
-        Live captions via your local gateway — not saved.
+        Captions run locally (Whisper + Ollama). Nothing is saved.
       </p>
 
       {hasAlerts && (
@@ -402,27 +412,23 @@ export function CallRoom({
         <div className="toolbar-controls">
           <button
             type="button"
-            className={`btn btn-ghost btn-icon${muted ? " active" : ""}`}
+            className={`btn btn-ghost btn-media${muted ? " off" : ""}`}
             onClick={toggleMute}
-            title={muted ? "Unmute" : "Mute"}
+            aria-pressed={muted}
             aria-label={muted ? "Unmute microphone" : "Mute microphone"}
           >
-            <span className="btn-icon-glyph" aria-hidden>
-              {muted ? "🔇" : "🎤"}
-            </span>
-            <span className="btn-icon-text">{muted ? "Unmute" : "Mute"}</span>
+            <span className="media-glyph mic" aria-hidden />
+            {muted ? "Unmute" : "Mute"}
           </button>
           <button
             type="button"
-            className={`btn btn-ghost btn-icon${camOff ? " active" : ""}`}
+            className={`btn btn-ghost btn-media${camOff ? " off" : ""}`}
             onClick={toggleCam}
-            title={camOff ? "Turn camera on" : "Turn camera off"}
+            aria-pressed={camOff}
             aria-label={camOff ? "Turn camera on" : "Turn camera off"}
           >
-            <span className="btn-icon-glyph" aria-hidden>
-              {camOff ? "📷" : "🎥"}
-            </span>
-            <span className="btn-icon-text">{camOff ? "Cam on" : "Cam off"}</span>
+            <span className="media-glyph cam" aria-hidden />
+            {camOff ? "Camera on" : "Camera off"}
           </button>
           <label className="check-label">
             <input

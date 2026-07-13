@@ -9,7 +9,6 @@ type Props = {
   lines: CaptionLine[];
   showOriginal: boolean;
   selfPeerId: string | null;
-  /** Overlay on video (CallRoom call-stage). Hides empty state; fewer lines. */
   docked?: boolean;
 };
 
@@ -25,18 +24,19 @@ export function CaptionOverlay({
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const tail = visible[visible.length - 1];
-  const tailKey = tail ? `${tail.id}:${tail.translatedText}:${tail.isFinal}` : "";
+  const tailKey = tail ? `${tail.id}:${tail.isFinal}` : "";
+  const tailText = tail?.translatedText ?? "";
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [tailKey]);
+  }, [tailKey, tailText]);
 
   if (visible.length === 0) {
     if (docked) return null;
     return (
-      <div className="captions empty">
+      <div className="captions empty" aria-hidden>
         <span className="muted">Captions appear here when someone speaks…</span>
       </div>
     );
@@ -67,12 +67,13 @@ export function CaptionOverlay({
                 <span className="caption-speaker">{line.speakerName}</span>
                 <span
                   className={`caption-state${line.isFinal ? " final" : " partial"}`}
+                  aria-hidden
                 >
-                  {line.isFinal ? "done" : "live"}
+                  {line.isFinal ? "●" : "…"}
                 </span>
               </div>
             )}
-            <p className="caption-text">{line.translatedText}</p>
+            <p className="caption-text">{line.translatedText || "\u00a0"}</p>
             {showOriginal && line.sourceText !== line.translatedText && (
               <p className="caption-original">{line.sourceText}</p>
             )}
