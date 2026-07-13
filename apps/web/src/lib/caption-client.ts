@@ -27,13 +27,25 @@ export type CaptionClientHandlers = {
   onClose?: () => void;
 };
 
+/**
+ * Resolve gateway WebSocket URL.
+ * Prefer 127.0.0.1 over "localhost" so Windows does not hit IPv6 ::1 when
+ * the Node gateway is bound on IPv4 only.
+ */
 function gatewayUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_GATEWAY_URL ??
-    (typeof window !== "undefined"
-      ? `ws://${window.location.hostname}:8787`
-      : "ws://localhost:8787")
-  );
+  if (process.env.NEXT_PUBLIC_GATEWAY_URL) {
+    return process.env.NEXT_PUBLIC_GATEWAY_URL;
+  }
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    const h =
+      host === "localhost" || host === "[::1]" || host === "::1"
+        ? "127.0.0.1"
+        : host;
+    const port = process.env.NEXT_PUBLIC_GATEWAY_PORT ?? "8787";
+    return `ws://${h}:${port}`;
+  }
+  return "ws://127.0.0.1:8787";
 }
 
 export class CaptionClient {

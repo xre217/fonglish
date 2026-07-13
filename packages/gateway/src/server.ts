@@ -95,6 +95,9 @@ const server = http.createServer((req, res) => {
       res.end(
         JSON.stringify({
           ok: true,
+          platform: process.platform,
+          arch: process.arch,
+          node: process.version,
           ollama: ollamaSnap.ok,
           ollamaBase: ollamaSnap.base,
           ollamaModel: ollamaSnap.model,
@@ -305,6 +308,12 @@ async function cleanup(state: SocketState): Promise<void> {
 
 server.listen(PORT, HOST, () => {
   console.log(`fonglish gateway on ws://${HOST}:${PORT}`);
+  console.log(`platform: ${process.platform}/${process.arch} node ${process.version}`);
+  if (process.platform === "win32") {
+    console.log(
+      "Windows: allow Node.js through the firewall for ports 8787 (gateway) and 3000 (web) if clients are on another machine.",
+    );
+  }
 
   void (async () => {
     ollamaSnap = await checkOllama();

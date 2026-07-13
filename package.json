@@ -2,12 +2,13 @@
   "name": "fonglish",
   "version": "0.1.0",
   "private": true,
-  "description": "Fonglish — real-time video call translation with live bilingual subtitles (WebRTC + local Whisper STT + Ollama MT)",
+  "description": "Fonglish — real-time bilingual call captions (WebRTC harness + local Whisper STT + Ollama MT; Windows/macOS/Linux)",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "env:init": "node scripts/init-env.mjs",
     "prepare": "npm run build -w @fonglish/shared && npm run build -w @fonglish/audio",
     "gateway": "npm run prepare && npm run dev -w @fonglish/gateway",
     "web": "npm run prepare && npm run dev -w @fonglish/web",
@@ -16,5 +17,10 @@
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ]
 }
