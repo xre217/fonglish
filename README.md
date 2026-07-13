@@ -19,11 +19,38 @@ Private **caption companion** direction: works **alongside** video apps (Zoom, M
 | **Ollama** | [ollama.com](https://ollama.com) — Windows desktop app or install script |
 | **Browser** | Chrome, Edge, or Chromium (best WebRTC + mic support) |
 
-Pull a chat model once:
+Pull a chat model (balanced preset uses `llama3`):
 
 ```bash
-ollama pull llama3.2:3b
+ollama pull llama3          # recommended for translation quality
+# optional smaller/faster: ollama pull llama3.2:3b
 ```
+
+## Caption quality (local, $0)
+
+Accuracy is **STT × MT**. Defaults use the **balanced** preset (better than the old tiny/3B demo stack).
+
+| `FONGLISH_QUALITY` | Whisper STT | Ollama MT | Use when |
+|--------------------|-------------|-----------|----------|
+| `fast` | `whisper-tiny` | `llama3.2:3b` | Lowest latency demos |
+| **`balanced`** (default) | `whisper-base` | `llama3` (8B) | Daily use |
+| `accurate` | `whisper-small` | `llama3` | Best local WER (heavier) |
+
+```env
+FONGLISH_QUALITY=balanced
+# optional overrides:
+# OLLAMA_MT_MODEL=llama3:latest
+# WHISPER_MODEL=Xenova/whisper-small
+# MT_ON_PARTIAL=0          # keep 0 — translate finals only (less flicker)
+# MT_GLOSSARY=Fonglish,WebRTC,Ollama
+```
+
+**Tips for better translations**
+
+1. Prefer **final** captions (default): partials show interim source; MT runs on speech end.  
+2. Larger Whisper helps more than a larger chat model when the transcript is wrong.  
+3. Use a glossary for product names that must not be translated.  
+4. Pull a stronger multilingual model if needed (`qwen2.5:7b`, etc.) and set `OLLAMA_MT_MODEL`.
 
 ## Quick start (local)
 
@@ -157,9 +184,12 @@ Gateway protocol stays the same: binary PCM frames in → `caption` events out. 
 
 | Variable | Default | Notes |
 |----------|---------|--------|
+| `FONGLISH_QUALITY` | `balanced` | `fast` / `balanced` / `accurate` |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama HTTP API |
-| `OLLAMA_MT_MODEL` | `llama3.2:3b` | Translation model (`ollama pull …`) |
-| `WHISPER_MODEL` | `Xenova/whisper-tiny` | Local ASR via Transformers.js |
+| `OLLAMA_MT_MODEL` | from preset | e.g. `llama3:latest` |
+| `WHISPER_MODEL` | from preset | e.g. `Xenova/whisper-base` |
+| `MT_ON_PARTIAL` | `0` | Set `1` to translate interim STT |
+| `MT_GLOSSARY` | — | Comma-separated terms / `src=tgt` |
 | `GATEWAY_PORT` | `8787` | Caption gateway |
 | `GATEWAY_HOST` | `0.0.0.0` | Bind all interfaces (LAN-friendly) |
 | `NEXT_PUBLIC_GATEWAY_URL` | `ws://127.0.0.1:8787` | Browser WS URL |

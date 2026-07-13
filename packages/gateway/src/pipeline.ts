@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { LangCode } from "@fonglish/shared";
 import type { CaptionEvent } from "@fonglish/shared";
 import { translateText } from "./mt-ollama.js";
+import { getMtOnPartial } from "./quality.js";
 import { LocalSttSession } from "./stt-local.js";
 import type { Room, RoomPeer } from "./rooms.js";
 import { broadcastCaption, send } from "./rooms.js";
@@ -10,6 +11,9 @@ import { broadcastCaption, send } from "./rooms.js";
  * Per-speaker STT → MT pipeline.
  * Each client streams their own mic; captions are broadcast to the room
  * translated into each viewer's captionLang.
+ *
+ * By default, Ollama runs only on final STT segments (higher accuracy,
+ * less flicker). Partials show source text or the last good translation.
  */
 export class SpeakerPipeline {
   private stt: LocalSttSession | null = null;
@@ -20,6 +24,10 @@ export class SpeakerPipeline {
   private closed = false;
   private connecting: Promise<void> | null = null;
   private captionGeneration = 0;
+  /** Last good translation per target lang (for partial display). */
+  private lastGoodByTarget = new Map<LangCode, string>();
+  private previousFinalSource = "";
+  private previousFinalByTarget = new Map<LangCode, string>();
 
   constructor(
     private room: Room,
@@ -102,6 +110,7 @@ export class SpeakerPipeline {
     this.lastPartialText = "";
     this.lastPartialMtAt = 0;
     this.captionGeneration++;
+    this.lastGoodByTarget.clear();
   }
 
   private async handleStt(
@@ -116,9 +125,10 @@ export class SpeakerPipeline {
 
     if (!finalUtterance) {
       if (this.partialMtTimer) clearTimeout(this.partialMtTimer);
+      // Show partials quickly; MT only if MT_ON_PARTIAL (off by default)
       this.partialMtTimer = setTimeout(() => {
         void this.emitCaptions(text, false);
-      }, 700);
+      }, getMtOnPartial() ? 900 : 250);
       return;
     }
 
@@ -130,6 +140,7 @@ export class SpeakerPipeline {
     await this.emitCaptions(text, true);
 
     if (speechFinal) {
+      this.previousFinalSource = text;
       this.utteranceId = randomUUID();
       this.lastPartialText = "";
     }
@@ -145,6 +156,7 @@ export class SpeakerPipeline {
     const speakerName = this.peer.displayName;
     const utteranceId = this.utteranceId;
     const ts = Date.now();
+    const runMt = isFinal || getMtOnPartial();
 
     const targets = new Set<LangCode>();
     for (const p of this.room.peers.values()) {
@@ -160,21 +172,47 @@ export class SpeakerPipeline {
     await Promise.all(
       [...targets].map(async (targetLang) => {
         if (targetLang === sourceLang) return;
-        if (!isFinal && Date.now() - this.lastPartialMtAt < 1200) {
+
+        if (!runMt) {
+          // Finals-first: reuse last good MT or show source until final
+          const stale =
+            this.lastGoodByTarget.get(targetLang) ??
+            this.previousFinalByTarget.get(targetLang);
+          translations.set(targetLang, stale ?? sourceText);
           return;
         }
+
+        // Optional throttle only when partial MT is enabled
+        if (!isFinal && Date.now() - this.lastPartialMtAt < 1500) {
+          const stale = this.lastGoodByTarget.get(targetLang);
+          if (stale) translations.set(targetLang, stale);
+          return;
+        }
+
         try {
           const { text, ms } = await translateText(
             sourceText,
             sourceLang,
             targetLang,
+            {
+              previousSource: this.previousFinalSource || undefined,
+              previousTranslation:
+                this.previousFinalByTarget.get(targetLang) || undefined,
+            },
           );
           translations.set(targetLang, text);
+          this.lastGoodByTarget.set(targetLang, text);
+          if (isFinal) {
+            this.previousFinalByTarget.set(targetLang, text);
+          }
           mtTimings.push(ms);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[mt] ${message}`);
-          translations.set(targetLang, sourceText);
+          translations.set(
+            targetLang,
+            this.lastGoodByTarget.get(targetLang) ?? sourceText,
+          );
           send(this.peer.ws, {
             type: "error",
             code: "mt_error",
@@ -184,7 +222,7 @@ export class SpeakerPipeline {
       }),
     );
 
-    if (!isFinal) this.lastPartialMtAt = Date.now();
+    if (!isFinal && runMt) this.lastPartialMtAt = Date.now();
 
     if (generation !== this.captionGeneration) return;
 
@@ -193,7 +231,9 @@ export class SpeakerPipeline {
         mtTimings.reduce((a, b) => a + b, 0) / mtTimings.length,
       );
       send(this.peer.ws, { type: "stats", mtMs: avg });
-      console.log(`[mt] ${avg}ms | ${sourceLang} → ${[...targets].join(",")}`);
+      console.log(
+        `[mt] ${avg}ms | ${isFinal ? "final" : "partial"} | ${sourceLang} → ${[...targets].join(",")}`,
+      );
     }
 
     broadcastCaption(this.room, speakerId, (viewer) => {

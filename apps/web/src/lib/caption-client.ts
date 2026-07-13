@@ -7,7 +7,7 @@ import type {
   ServerMessage,
   SignalPayload,
 } from "@fonglish/shared";
-import { resolveGatewayUrl } from "./gateway-url";
+import { resolveGatewayUrl, formatWsError } from "./gateway-url";
 
 export type CaptionClientHandlers = {
   onWelcome?: (
@@ -42,10 +42,7 @@ export class CaptionClient {
     ws.onopen = () => this.handlers.onOpen?.();
     ws.onclose = () => this.handlers.onClose?.();
     ws.onerror = () => {
-      this.handlers.onError?.(
-        "ws_error",
-        `WebSocket error — is the gateway running? Tried ${url}`,
-      );
+      this.handlers.onError?.("ws_error", formatWsError(url));
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") return;

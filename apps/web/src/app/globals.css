@@ -300,6 +300,21 @@ code {
   padding: 1.5rem;
 }
 
+.lobby-hosted-banner {
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+}
+
+.lobby-hosted-banner code {
+  font-size: 0.78rem;
+}
+
+.lobby-hosted-banner a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .lobby-langs {
   display: grid;
   grid-template-columns: 1fr 1fr;

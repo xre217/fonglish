@@ -21,6 +21,7 @@ import {
 } from "./rooms.js";
 import { SpeakerPipeline } from "./pipeline.js";
 import { checkOllama } from "./mt-ollama.js";
+import { qualitySummary, resolveQuality } from "./quality.js";
 import { getSttLoadState, preloadAsr } from "./stt-local.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,7 +48,7 @@ type OllamaSnapshot = {
 let ollamaSnap: OllamaSnapshot = {
   ok: false,
   base: process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434",
-  model: process.env.OLLAMA_MT_MODEL ?? "llama3.2:3b",
+  model: "pending",
   error: "not checked yet",
 };
 
@@ -98,6 +99,7 @@ const server = http.createServer((req, res) => {
           platform: process.platform,
           arch: process.arch,
           node: process.version,
+          quality: resolveQuality(),
           ollama: ollamaSnap.ok,
           ollamaBase: ollamaSnap.base,
           ollamaModel: ollamaSnap.model,
@@ -309,6 +311,8 @@ async function cleanup(state: SocketState): Promise<void> {
 server.listen(PORT, HOST, () => {
   console.log(`fonglish gateway on ws://${HOST}:${PORT}`);
   console.log(`platform: ${process.platform}/${process.arch} node ${process.version}`);
+  resolveQuality();
+  console.log(qualitySummary());
   if (process.platform === "win32") {
     console.log(
       "Windows: allow Node.js through the firewall for ports 8787 (gateway) and 3000 (web) if clients are on another machine.",
@@ -324,7 +328,7 @@ server.listen(PORT, HOST, () => {
         `Ollama: NOT READY (${ollamaSnap.base}, model ${ollamaSnap.model}) — ${ollamaSnap.error ?? "unknown"}`,
       );
       console.warn(
-        "Start Ollama and pull the model, e.g. `ollama pull llama3.2:3b`",
+        "Start Ollama and pull the model, e.g. `ollama pull llama3` or `ollama pull llama3.2:3b`",
       );
     }
     broadcastServices(wss);

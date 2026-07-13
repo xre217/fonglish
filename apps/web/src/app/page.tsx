@@ -4,6 +4,12 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LANGUAGES, type LangCode } from "@fonglish/shared";
 import { randomId, roomPath } from "@/lib/ids";
+import {
+  isHostedUi,
+  loadGatewayUrlSetting,
+  redirectHostedToLocalWeb,
+  saveGatewayUrlSetting,
+} from "@/lib/gateway-url";
 
 const NAME_KEY = "fong_display_name";
 const SPEAK_KEY = "fong_speak_lang";
@@ -24,6 +30,8 @@ export default function LobbyPage() {
     () => load(CAPTION_KEY, "es") as LangCode,
   );
   const [joinId, setJoinId] = useState("");
+  const [gatewayUrl, setGatewayUrl] = useState(() => loadGatewayUrlSetting());
+  const hostedUi = useMemo(() => isHostedUi(), []);
 
   const canStart = useMemo(
     () => displayName.trim().length >= 1,
@@ -34,6 +42,7 @@ export default function LobbyPage() {
     localStorage.setItem(NAME_KEY, displayName.trim());
     localStorage.setItem(SPEAK_KEY, speakLang);
     localStorage.setItem(CAPTION_KEY, captionLang);
+    saveGatewayUrlSetting(gatewayUrl);
   };
 
   const goRoom = (roomId: string) => {
@@ -43,7 +52,9 @@ export default function LobbyPage() {
       speak: speakLang,
       caption: captionLang,
     });
-    router.push(`${roomPath(roomId)}?${qs.toString()}`);
+    const path = `${roomPath(roomId)}?${qs.toString()}`;
+    if (redirectHostedToLocalWeb(path)) return;
+    router.push(path);
   };
 
   return (
@@ -59,6 +70,16 @@ export default function LobbyPage() {
         </header>
 
         <div className="card lobby-card">
+          {hostedUi && (
+            <div className="banner info lobby-hosted-banner" role="status">
+              Captions run on your local machine. Start{" "}
+              <code>npm run gateway</code> and <code>npm run web</code> — starting
+              a session will open{" "}
+              <a href="http://localhost:3000">http://localhost:3000</a> automatically.
+              For remote clients, set Caption gateway to your LAN address below.
+            </div>
+          )}
+
           <div className="lobby-form">
             <div className="field">
               <label htmlFor="name">Display name</label>
@@ -100,6 +121,17 @@ export default function LobbyPage() {
                   ))}
                 </select>
               </div>
+            </div>
+
+            <div className="field">
+              <label htmlFor="gateway">Caption gateway</label>
+              <input
+                id="gateway"
+                placeholder="ws://127.0.0.1:8787"
+                value={gatewayUrl}
+                onChange={(e) => setGatewayUrl(e.target.value)}
+                spellCheck={false}
+              />
             </div>
 
             <button

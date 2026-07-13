@@ -1,5 +1,6 @@
 import type { LangCode } from "@fonglish/shared";
 import { AUDIO } from "@fonglish/shared";
+import { getWhisperModel } from "./quality.js";
 
 export type SttPartial = {
   text: string;
@@ -24,9 +25,6 @@ const MIN_SPEECH_MS = Number(process.env.STT_MIN_SPEECH_MS ?? 350);
 /** Interim re-transcribe interval while speaking. */
 const PARTIAL_INTERVAL_MS = Number(process.env.STT_PARTIAL_MS ?? 1600);
 
-const WHISPER_MODEL =
-  process.env.WHISPER_MODEL ?? "Xenova/whisper-tiny";
-
 export type SttLoadState = {
   status: "idle" | "loading" | "ready" | "error";
   model: string;
@@ -39,7 +37,10 @@ type AsrPipeline = (
 ) => Promise<{ text: string } | { text: string }[]>;
 
 let asrPromise: Promise<AsrPipeline> | null = null;
-let sttLoad: SttLoadState = { status: "idle", model: WHISPER_MODEL };
+let sttLoad: SttLoadState = {
+  status: "idle",
+  model: process.env.WHISPER_MODEL ?? "Xenova/whisper-base",
+};
 
 export function getSttLoadState(): SttLoadState {
   return sttLoad;
@@ -47,22 +48,24 @@ export function getSttLoadState(): SttLoadState {
 
 async function getAsr(): Promise<AsrPipeline> {
   if (!asrPromise) {
-    sttLoad = { status: "loading", model: WHISPER_MODEL };
+    const model = getWhisperModel();
+    sttLoad = { status: "loading", model };
     asrPromise = (async () => {
       // @xenova/transformers loads ONNX whisper in-process (local, free).
       const { pipeline, env } = await import("@xenova/transformers");
       // Allow remote model download on first run; cache thereafter.
       env.allowLocalModels = false;
-      const pipe = await pipeline(
-        "automatic-speech-recognition",
-        WHISPER_MODEL,
-      );
-      sttLoad = { status: "ready", model: WHISPER_MODEL };
+      const pipe = await pipeline("automatic-speech-recognition", model);
+      sttLoad = { status: "ready", model };
       return pipe as unknown as AsrPipeline;
     })().catch((err) => {
       asrPromise = null;
       const message = err instanceof Error ? err.message : String(err);
-      sttLoad = { status: "error", model: WHISPER_MODEL, error: message };
+      sttLoad = {
+        status: "error",
+        model: getWhisperModel(),
+        error: message,
+      };
       throw err;
     });
   }
