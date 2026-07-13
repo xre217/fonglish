@@ -1,0 +1,20 @@
+{
+  "name": "fonglish",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fonglish — real-time video call translation with live bilingual subtitles (WebRTC + xAI STT/MT)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "prepare": "npm run build -w @fonglish/shared && npm run build -w @fonglish/audio",
+    "gateway": "npm run prepare && npm run dev -w @fonglish/gateway",
+    "web": "npm run prepare && npm run dev -w @fonglish/web",
+    "build": "npm run build -w @fonglish/shared && npm run build -w @fonglish/audio && npm run build -w @fonglish/gateway && npm run build -w @fonglish/web",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
