@@ -1,14 +1,34 @@
 import type { SignalPayload } from "@fonglish/shared";
 
+/**
+ * STUN + free public TURN (Metered openrelay) so Mac↔Windows media works
+ * across NATs — STUN alone often fails for remote video.
+ */
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
 ];
 
 export type PeerConnectionHandlers = {
   onRemoteStream: (stream: MediaStream) => void;
   onSignal: (payload: SignalPayload) => void;
   onConnectionState?: (state: RTCPeerConnectionState) => void;
+  onIceConnectionState?: (state: RTCIceConnectionState) => void;
 };
 
 /**
@@ -19,6 +39,7 @@ export class CallPeer {
   private makingOffer = false;
   private ignoreOffer = false;
   private isPolite: boolean;
+  private remoteStream: MediaStream | null = null;
 
   constructor(
     private readonly localStream: MediaStream,
@@ -26,40 +47,59 @@ export class CallPeer {
     opts: { polite: boolean },
   ) {
     this.isPolite = opts.polite;
-    this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    this.pc = new RTCPeerConnection({
+      iceServers: ICE_SERVERS,
+      iceCandidatePoolSize: 4,
+    });
 
     for (const track of localStream.getTracks()) {
       this.pc.addTrack(track, localStream);
     }
 
     this.pc.ontrack = (ev) => {
-      const [stream] = ev.streams;
-      if (stream) this.handlers.onRemoteStream(stream);
+      // Some browsers omit ev.streams — build stream from track
+      let stream = ev.streams[0] ?? null;
+      if (!stream) {
+        if (!this.remoteStream) this.remoteStream = new MediaStream();
+        stream = this.remoteStream;
+        if (!stream.getTracks().some((t) => t.id === ev.track.id)) {
+          stream.addTrack(ev.track);
+        }
+      } else {
+        this.remoteStream = stream;
+      }
+      this.handlers.onRemoteStream(stream);
     };
 
     this.pc.onicecandidate = (ev) => {
+      if (!ev.candidate) return; // end-of-candidates — skip null payload
       this.handlers.onSignal({
         kind: "ice",
-        candidate: ev.candidate
-          ? {
-              candidate: ev.candidate.candidate,
-              sdpMid: ev.candidate.sdpMid,
-              sdpMLineIndex: ev.candidate.sdpMLineIndex,
-              usernameFragment: ev.candidate.usernameFragment,
-            }
-          : null,
+        candidate: {
+          candidate: ev.candidate.candidate,
+          sdpMid: ev.candidate.sdpMid,
+          sdpMLineIndex: ev.candidate.sdpMLineIndex,
+          usernameFragment: ev.candidate.usernameFragment,
+        },
       });
     };
 
     this.pc.onconnectionstatechange = () => {
       this.handlers.onConnectionState?.(this.pc.connectionState);
     };
+
+    this.pc.oniceconnectionstatechange = () => {
+      this.handlers.onIceConnectionState?.(this.pc.iceConnectionState);
+    };
   }
 
   async createOffer(): Promise<void> {
     try {
       this.makingOffer = true;
-      const offer = await this.pc.createOffer();
+      const offer = await this.pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      });
       await this.pc.setLocalDescription(offer);
       this.handlers.onSignal({
         kind: "offer",
@@ -91,6 +131,7 @@ export class CallPeer {
     }
 
     if (payload.kind === "answer") {
+      if (this.pc.signalingState === "stable") return;
       await this.pc.setRemoteDescription({
         type: "answer",
         sdp: payload.sdp,
@@ -99,6 +140,7 @@ export class CallPeer {
     }
 
     if (payload.kind === "ice") {
+      if (!payload.candidate?.candidate) return;
       try {
         await this.pc.addIceCandidate(payload.candidate);
       } catch (err) {

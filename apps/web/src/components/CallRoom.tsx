@@ -137,9 +137,26 @@ export function CallRoom({
           onRemoteStream: (s) => setRemoteStream(s),
           onSignal: (payload) => client.signal(remote.peerId, payload),
           onConnectionState: (state) => {
-            if (state === "connected") setStatus("Connected");
-            if (state === "failed") setError("WebRTC connection failed");
+            if (state === "connected") {
+              setStatus("Connected");
+              setError(null);
+            }
+            if (state === "failed") {
+              setError(
+                "Video link failed (WebRTC). Both must use the same room + same public gateway. Click the main video once if it’s black (autoplay). Check firewall / try again.",
+              );
+            }
             if (state === "disconnected") setStatus("Reconnecting…");
+            if (state === "connecting") setStatus("Connecting media…");
+          },
+          onIceConnectionState: (state) => {
+            if (state === "failed" || state === "disconnected") {
+              setStatus(`Network: ${state}`);
+            }
+            if (state === "connected" || state === "completed") {
+              setStatus("Connected");
+            }
+            if (state === "checking") setStatus("Finding network path…");
           },
         },
         { polite },
@@ -367,7 +384,7 @@ export function CallRoom({
     waitingForPeer && (shareIsLoopback || pageIsLoopback || !!lanHost);
 
   return (
-    <div className="room">
+    <div className="room room-animate">
       {copyToast && (
         <div className="toast" role="status">
           Copied to clipboard

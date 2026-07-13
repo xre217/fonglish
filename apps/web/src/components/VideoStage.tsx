@@ -35,10 +35,34 @@ function VideoTile({
     const el = ref.current;
     if (!el) return;
     el.srcObject = stream;
+    // Remote (unmuted) video often needs an explicit play() — autoplay policies
+    if (stream) {
+      const p = el.play();
+      if (p !== undefined) {
+        void p.catch(() => {
+          /* user gesture may be required; click-to-play overlay below */
+        });
+      }
+    }
   }, [stream]);
 
+  const tryPlay = () => {
+    const el = ref.current;
+    if (!el) return;
+    void el.play().catch(() => undefined);
+  };
+
   return (
-    <div className={`video-tile${pip ? " pip" : ""}`}>
+    <div
+      className={`video-tile${pip ? " pip" : ""}`}
+      onClick={tryPlay}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") tryPlay();
+      }}
+      role={stream && !muted ? "button" : undefined}
+      tabIndex={stream && !muted ? 0 : undefined}
+      title={stream && !muted ? "Click if video is black (autoplay)" : undefined}
+    >
       <video
         ref={ref}
         autoPlay
@@ -89,7 +113,17 @@ export function VideoStage({
     .join(", ");
 
   return (
-    <div className="video-stage" role="region" aria-label="Video conference">
+    <div
+      className={[
+        "video-stage",
+        remoteStream ? "has-remote" : "",
+        waitingForPeer && !remoteStream ? "waiting" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      role="region"
+      aria-label="Video conference"
+    >
       <VideoTile
         stream={remoteStream}
         label={remoteName ?? "Participant"}
