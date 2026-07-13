@@ -7,6 +7,7 @@ import { randomId, roomPath } from "@/lib/ids";
 import {
   isHostedUi,
   loadGatewayUrlSetting,
+  localWebBaseUrl,
   redirectHostedToLocalWeb,
   saveGatewayUrlSetting,
 } from "@/lib/gateway-url";
@@ -31,6 +32,7 @@ export default function LobbyPage() {
   );
   const [joinId, setJoinId] = useState("");
   const [gatewayUrl, setGatewayUrl] = useState(() => loadGatewayUrlSetting());
+  const [hostedHint, setHostedHint] = useState<string | null>(null);
   const hostedUi = useMemo(() => isHostedUi(), []);
 
   const canStart = useMemo(
@@ -45,15 +47,23 @@ export default function LobbyPage() {
     saveGatewayUrlSetting(gatewayUrl);
   };
 
-  const goRoom = (roomId: string) => {
+  const goRoom = async (roomId: string) => {
     persist();
+    setHostedHint(null);
     const qs = new URLSearchParams({
       name: displayName.trim(),
       speak: speakLang,
       caption: captionLang,
     });
     const path = `${roomPath(roomId)}?${qs.toString()}`;
-    if (redirectHostedToLocalWeb(path)) return;
+    // Only jumps to 127.0.0.1:3000 if local web is actually running
+    if (await redirectHostedToLocalWeb(path)) return;
+    if (hostedUi) {
+      setHostedHint(
+        `Local web is not running on this PC. In a terminal run: npm run gateway  and  npm run web, then open ${localWebBaseUrl()}${path}`,
+      );
+      return;
+    }
     router.push(path);
   };
 
@@ -64,19 +74,44 @@ export default function LobbyPage() {
           <p className="lobby-mark">Fonglish</p>
           <h1 className="lobby-title">Secure bilingual consultation</h1>
           <p className="lobby-lead">
-            Private video with live translated captions. Each participant selects
-            their own spoken and caption language.
+            Private video with live translated captions. Speech recognition and
+            translation run on your local gateway — not in the cloud.
           </p>
         </header>
 
         <div className="card lobby-card">
           {hostedUi && (
-            <div className="banner info lobby-hosted-banner" role="status">
-              Captions run on your local machine. Start{" "}
-              <code>npm run gateway</code> and <code>npm run web</code> — starting
-              a session will open{" "}
-              <a href="http://localhost:3000">http://localhost:3000</a> automatically.
-              For remote clients, set Caption gateway to your LAN address below.
+            <div className="banner info lobby-hosted-banner" role="note">
+              <strong className="lobby-hosted-title">Windows / any PC setup</strong>
+              <p className="lobby-hosted-body">
+                Vercel only hosts this UI. On the machine that will process
+                captions, open a terminal in the repo and run:
+              </p>
+              <ol className="lobby-hosted-steps">
+                <li>
+                  <code>npm run gateway</code>
+                </li>
+                <li>
+                  <code>npm run web</code>
+                </li>
+                <li>
+                  Open{" "}
+                  <a href={localWebBaseUrl()}>
+                    {localWebBaseUrl()}
+                  </a>{" "}
+                  (use <strong>127.0.0.1</strong>, not only the Vercel link)
+                </li>
+              </ol>
+              <p className="lobby-hosted-body">
+                If you click a Vercel invite without local web running, the
+                browser cannot open the session — that is expected.
+              </p>
+            </div>
+          )}
+
+          {hostedHint && (
+            <div className="banner warn lobby-hosted-banner" role="alert">
+              {hostedHint}
             </div>
           )}
 
@@ -131,7 +166,12 @@ export default function LobbyPage() {
                 value={gatewayUrl}
                 onChange={(e) => setGatewayUrl(e.target.value)}
                 spellCheck={false}
+                aria-describedby="gateway-hint"
+                autoComplete="off"
               />
+              <span id="gateway-hint" className="field-hint">
+                Default for local use. On another device, use your host LAN IP.
+              </span>
             </div>
 
             <button
@@ -173,8 +213,8 @@ export default function LobbyPage() {
         </div>
 
         <p className="lobby-footer">
-          Captions are processed on your firm&apos;s local infrastructure. No
-          recording or retention by this application.
+          No recording or retention. Quality preset{" "}
+          <code>balanced</code> uses whisper-base and llama3 on your gateway.
         </p>
       </div>
     </main>

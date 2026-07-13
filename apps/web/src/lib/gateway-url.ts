@@ -83,20 +83,20 @@ export function formatWsError(url: string): string {
   if (isHosted && loopback) {
     return (
       `Cannot reach your local caption gateway from this hosted page. ` +
-      `Run npm run gateway, then open http://localhost:3000 — or set Caption gateway ` +
-      `to your machine's LAN address (e.g. ws://192.168.1.x:8787). Tried ${url}`
+      `On this PC run: npm run gateway  and  npm run web, then open http://127.0.0.1:3000 ` +
+      `(not only the Vercel link). Tried ${url}`
     );
   }
   if (protocol === "https:" && url.startsWith("ws://")) {
     return (
       `This secure page cannot open an insecure WebSocket. ` +
-      `Use http://localhost:3000 for local sessions, or configure a secure wss:// tunnel. ` +
+      `Use http://127.0.0.1:3000 for local sessions, or configure a secure wss:// tunnel. ` +
       `Tried ${url}`
     );
   }
   return (
     `Cannot reach the caption gateway. Start it with npm run gateway ` +
-    `and confirm ${url} is reachable (curl http://127.0.0.1:8787/health).`
+    `and confirm ${url} is reachable.`
   );
 }
 
@@ -109,17 +109,90 @@ export function isLoopbackGatewayUrl(url: string): boolean {
   return /:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/i.test(url);
 }
 
+export function localWebBaseUrl(): string {
+  const port = process.env.NEXT_PUBLIC_WEB_PORT ?? "3000";
+  // 127.0.0.1 is more reliable than localhost on Windows (IPv6)
+  return `http://127.0.0.1:${port}`;
+}
+
+/** True if local Next dev server answers (same machine). */
+export async function isLocalWebReachable(
+  timeoutMs = 800,
+): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  const base = localWebBaseUrl();
+  const ctrl = new AbortController();
+  const t = window.setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    // next may 404 / but connection success means server is up
+    await fetch(base, {
+      method: "HEAD",
+      mode: "no-cors",
+      cache: "no-store",
+      signal: ctrl.signal,
+    });
+    return true;
+  } catch {
+    try {
+      await fetch(base, {
+        method: "GET",
+        mode: "no-cors",
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  } finally {
+    window.clearTimeout(t);
+  }
+}
+
 /**
- * Hosted UI cannot open ws://127.0.0.1 from the browser.
- * Redirect session flows to the local Next dev server when using loopback gateway.
+ * If we're on Vercel and the local web app is running, jump there so WS to
+ * the local gateway works. Never hard-redirect when localhost is down
+ * (that made invite links look "broken" on Windows).
+ *
+ * @returns true if a redirect was started
  */
-export function redirectHostedToLocalWeb(pathWithQuery: string): boolean {
+export async function redirectHostedToLocalWeb(
+  pathWithQuery: string,
+): Promise<boolean> {
   if (typeof window === "undefined") return false;
   if (!isHostedUi()) return false;
   const gatewayUrl = resolveGatewayUrl();
   if (!isLoopbackGatewayUrl(gatewayUrl)) return false;
-  const port = process.env.NEXT_PUBLIC_WEB_PORT ?? "3000";
-  const target = `http://localhost:${port}${pathWithQuery}`;
+
+  const up = await isLocalWebReachable();
+  if (!up) return false;
+
+  const target = `${localWebBaseUrl()}${pathWithQuery}`;
   window.location.replace(target);
   return true;
+}
+
+/**
+ * Prefer a shareable invite URL:
+ * - On localhost, use Vercel production URL when configured so remote Windows
+ *   peers don't get a dead http://127.0.0.1 link.
+ * - Otherwise current origin.
+ */
+export function buildShareUrl(roomId: string): string {
+  if (typeof window === "undefined") return "";
+  const path = `/room/${encodeURIComponent(roomId)}`;
+  const publicBase =
+    process.env.NEXT_PUBLIC_SHARE_ORIGIN?.replace(/\/$/, "") ||
+    (process.env.NEXT_PUBLIC_VERCEL_URL
+      ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL.replace(/^https?:\/\//, "")}`
+      : "");
+
+  const host = window.location.hostname;
+  const isLoopback =
+    host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+
+  if (isLoopback && publicBase) {
+    return `${publicBase}${path}`;
+  }
+  return `${window.location.origin}${path}`;
 }

@@ -10,6 +10,7 @@ import {
   type PeerInfo,
 } from "@fonglish/shared";
 import { CaptionClient } from "@/lib/caption-client";
+import { buildShareUrl } from "@/lib/gateway-url";
 import { CallPeer, getMediaStream } from "@/lib/webrtc";
 import { CaptionOverlay, type CaptionLine } from "./CaptionOverlay";
 import { VideoStage } from "./VideoStage";
@@ -70,10 +71,7 @@ export function CallRoom({
   const micLoopStop = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const shareUrl = useMemo(() => {
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/room/${encodeURIComponent(roomId)}`;
-  }, [roomId]);
+  const shareUrl = useMemo(() => buildShareUrl(roomId), [roomId]);
 
   const upsertCaption = useCallback((caption: CaptionEvent) => {
     setCaptions((prev) => {
@@ -259,11 +257,16 @@ export function CallRoom({
 
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        // Windows / non-secure contexts: fallback select
+        window.prompt("Copy invite link:", shareUrl);
+      }
       setCopyToast(true);
       window.setTimeout(() => setCopyToast(false), 2000);
     } catch {
-      setError("Could not copy link");
+      window.prompt("Copy invite link:", shareUrl);
     }
   };
 
@@ -353,10 +356,11 @@ export function CallRoom({
             type="button"
             className={waitingForPeer ? "btn btn-primary" : "btn btn-secondary"}
             onClick={copyLink}
+            aria-label="Share session access link"
           >
             Share access link
           </button>
-          <a className="btn btn-ghost" href="/">
+          <a className="btn btn-ghost" href="/" aria-label="End session and return to lobby">
             End session
           </a>
         </div>
@@ -419,13 +423,14 @@ export function CallRoom({
         </div>
       </div>
 
-      <div className="toolbar card">
+      <div className="toolbar card" role="toolbar" aria-label="Call controls">
         <div className="toolbar-controls">
           <button
             type="button"
             className={`btn btn-ghost btn-media${muted ? " off" : ""}`}
             onClick={toggleMute}
             aria-pressed={muted}
+            aria-label={muted ? "Unmute microphone" : "Mute microphone"}
           >
             {muted ? "Unmute" : "Mute"}
           </button>
@@ -434,6 +439,7 @@ export function CallRoom({
             className={`btn btn-ghost btn-media${camOff ? " off" : ""}`}
             onClick={toggleCam}
             aria-pressed={camOff}
+            aria-label={camOff ? "Turn camera on" : "Turn camera off"}
           >
             {camOff ? "Camera on" : "Camera off"}
           </button>
@@ -442,9 +448,13 @@ export function CallRoom({
               type="checkbox"
               checked={showOriginal}
               onChange={(e) => setShowOriginal(e.target.checked)}
+              aria-describedby="show-original-hint"
             />
             Show source language
           </label>
+          <span id="show-original-hint" className="sr-only">
+            Displays the original spoken text beneath each translated caption
+          </span>
         </div>
         <div className="toolbar-langs">
           <div className="field">

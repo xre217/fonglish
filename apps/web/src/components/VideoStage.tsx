@@ -15,6 +15,7 @@ type Props = {
 function VideoTile({
   stream,
   label,
+  ariaLabel,
   muted,
   mirror,
   placeholder,
@@ -22,6 +23,7 @@ function VideoTile({
 }: {
   stream: MediaStream | null;
   label: string;
+  ariaLabel: string;
   muted?: boolean;
   mirror?: boolean;
   placeholder: string;
@@ -43,9 +45,16 @@ function VideoTile({
         playsInline
         muted={muted}
         className={mirror ? "mirror" : undefined}
+        aria-label={ariaLabel}
       />
-      {!stream && <div className="placeholder">{placeholder}</div>}
-      <div className="video-label">{label}</div>
+      {!stream && (
+        <div className="placeholder" role="status" aria-live="polite">
+          {placeholder}
+        </div>
+      )}
+      <div className="video-label" aria-hidden>
+        {label}
+      </div>
     </div>
   );
 }
@@ -59,6 +68,10 @@ export function VideoStage({
   camOff,
   waitingForPeer = false,
 }: Props) {
+  const remotePlaceholder = waitingForPeer
+    ? "Awaiting participant"
+    : "Establishing connection";
+
   const localLabel = [
     localName,
     muted ? "audio muted" : null,
@@ -67,20 +80,26 @@ export function VideoStage({
     .filter(Boolean)
     .join(" · ");
 
+  const localAria = [
+    `Your video, ${localName}`,
+    muted ? "microphone muted" : null,
+    camOff ? "camera off" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   return (
-    <div className="video-stage">
+    <div className="video-stage" role="region" aria-label="Video conference">
       <VideoTile
         stream={remoteStream}
         label={remoteName ?? "Participant"}
-        placeholder={
-          waitingForPeer
-            ? "Awaiting participant"
-            : "Establishing connection"
-        }
+        ariaLabel={`${remoteName ?? "Participant"} video`}
+        placeholder={remotePlaceholder}
       />
       <VideoTile
         stream={camOff ? null : localStream}
         label={localLabel}
+        ariaLabel={localAria}
         muted
         mirror
         pip

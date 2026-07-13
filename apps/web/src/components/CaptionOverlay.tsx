@@ -36,7 +36,7 @@ export function CaptionOverlay({
   if (visible.length === 0) {
     if (docked) return null;
     return (
-      <div className="captions empty">
+      <div className="captions empty" role="status">
         <span className="muted">Captions will appear when dialogue begins.</span>
       </div>
     );
@@ -47,10 +47,13 @@ export function CaptionOverlay({
       ref={scrollRef}
       className={`captions${docked ? " docked" : ""}`}
       aria-live="polite"
+      aria-relevant="additions text"
+      aria-atomic="false"
     >
       {visible.map((line, index) => {
         const isSelf = line.speakerId === selfPeerId;
         const isLatest = index === visible.length - 1;
+        const stateLabel = line.isFinal ? "Final" : "In progress";
         return (
           <div
             key={line.id}
@@ -60,13 +63,23 @@ export function CaptionOverlay({
               isSelf ? "self" : "remote",
               isLatest ? "latest" : "older",
             ].join(" ")}
+            aria-label={`${line.speakerName}, ${stateLabel}: ${line.translatedText}`}
           >
             {isLatest && (
-              <p className="caption-speaker-line">{line.speakerName}</p>
+              <p className="caption-speaker-line">
+                <span>{line.speakerName}</span>
+                {!line.isFinal && (
+                  <span className="caption-state partial" aria-hidden>
+                    · live
+                  </span>
+                )}
+              </p>
             )}
             <p className="caption-text">{line.translatedText}</p>
             {showOriginal && line.sourceText !== line.translatedText && (
-              <p className="caption-original">{line.sourceText}</p>
+              <p className="caption-original" lang="auto">
+                {line.sourceText}
+              </p>
             )}
           </div>
         );
