@@ -670,6 +670,21 @@ code {
   gap: 0.35rem;
 }
 
+.captions.docked .caption-line {
+  max-width: none;
+  padding: 0.4rem 0.55rem;
+}
+
+.captions.docked .caption-line.older {
+  opacity: 0.7;
+  padding: 0.3rem 0.5rem;
+}
+
+.captions.docked .caption-line.older .caption-text {
+  font-size: 0.86rem;
+  font-weight: 400;
+}
+
 .captions.docked .caption-line.latest.partial {
   border-style: solid;
   border-color: rgba(184, 149, 106, 0.35);
@@ -836,14 +851,14 @@ code {
 
 .btn-media {
   padding: 0.55rem 0.9rem;
-  border-radius: 999px;
-  font-size: 0.88rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
 }
 
 .btn-media.off {
-  background: rgba(255, 107, 138, 0.12);
-  border-color: rgba(255, 107, 138, 0.35);
-  color: #ffc2d0;
+  background: rgba(196, 107, 107, 0.1);
+  border-color: rgba(196, 107, 107, 0.3);
+  color: #e8c4c4;
 }
 
 .toolbar-langs {
@@ -868,6 +883,11 @@ code {
 
 .check-label input {
   accent-color: var(--accent);
+}
+
+.room-footer {
+  margin: 0;
+  text-align: center;
 }
 
 @media (max-width: 640px) {
