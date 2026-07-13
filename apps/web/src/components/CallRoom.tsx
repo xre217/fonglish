@@ -6,6 +6,7 @@ import {
   LANGUAGES,
   type CaptionEvent,
   type GatewayServices,
+  type InterpretEvent,
   type LangCode,
   type PeerInfo,
 } from "@fonglish/shared";
@@ -22,10 +23,22 @@ import {
   resolveGatewayUrl,
   saveShareHost,
 } from "@/lib/gateway-url";
+import { InterpretPlayer } from "@/lib/interpret-player";
 import { CallPeer, getMediaStream } from "@/lib/webrtc";
 import { CaptionOverlay, type CaptionLine } from "./CaptionOverlay";
 import { VideoStage } from "./VideoStage";
 import { FonglishLogo } from "./FonglishLogo";
+
+const SUBTITLES_KEY = "fong_show_subtitles";
+/** Volume of remote original voice while host interpretation plays. */
+const DUCK_VOLUME = 0.2;
+
+function loadShowSubtitles(): boolean {
+  if (typeof window === "undefined") return false;
+  const v = localStorage.getItem(SUBTITLES_KEY);
+  if (v === null) return false; // default off — interpreter-first
+  return v === "1" || v === "true";
+}
 
 function servicePillClass(
   kind: "ok" | "loading" | "bad",
@@ -44,6 +57,13 @@ function sttKind(s: GatewayServices | null): "ok" | "loading" | "bad" {
   if (!s) return "loading";
   if (s.stt === "ready") return "ok";
   if (s.stt === "loading") return "loading";
+  return "bad";
+}
+
+function ttsKind(s: GatewayServices | null): "ok" | "loading" | "bad" {
+  if (!s || s.tts == null) return "loading";
+  if (s.tts === "ready") return "ok";
+  if (s.tts === "loading") return "loading";
   return "bad";
 }
 
@@ -72,28 +92,37 @@ export function CallRoom({
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
   const [showOriginal, setShowOriginal] = useState(true);
+  const [showSubtitles, setShowSubtitles] = useState(loadShowSubtitles);
   const [captions, setCaptions] = useState<CaptionLine[]>([]);
   const [mtMs, setMtMs] = useState<number | null>(null);
+  const [ttsMs, setTtsMs] = useState<number | null>(null);
   const [services, setServices] = useState<GatewayServices | null>(null);
   const [copyToast, setCopyToast] = useState(false);
   const [lanHost, setLanHost] = useState(() => loadShareHost());
   const [lanHint, setLanHint] = useState<string | null>(null);
-  /** Mic level 0–1 for caption-path diagnostics (STT feed, not WebRTC). */
+  /** Mic level 0–1 for STT-path diagnostics (not WebRTC). */
   const [micLevel, setMicLevel] = useState(0);
   const [pcmSent, setPcmSent] = useState(0);
   const [mediaDiag, setMediaDiag] = useState<string>("");
   const [needClickToPlay, setNeedClickToPlay] = useState(true);
   const [iceState, setIceState] = useState<string>("");
+  const [remoteVolume, setRemoteVolume] = useState(1);
+  const [interpreting, setInterpreting] = useState(false);
 
   const clientRef = useRef<CaptionClient | null>(null);
   const callRef = useRef<CallPeer | null>(null);
   const micSourceRef = useRef<BrowserMicSource | null>(null);
+  const interpretPlayerRef = useRef<InterpretPlayer | null>(null);
   const micLoopStop = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const joinedRef = useRef(false);
   const mutedRef = useRef(false);
   const pcmCountRef = useRef(0);
   const levelTickRef = useRef(0);
+  const captionLangRef = useRef(captionLang);
+  const peerIdRef = useRef(peerId);
+  captionLangRef.current = captionLang;
+  peerIdRef.current = peerId;
 
   const activeGateway = useMemo(() => resolveGatewayUrl(), []);
   const oneClick = canOneClickInvite(activeGateway);
@@ -135,6 +164,21 @@ export function CallRoom({
       // keep last 12
       return next.slice(-12);
     });
+  }, []);
+
+  const handleInterpret = useCallback((ev: InterpretEvent) => {
+    // Only play remote speech translated into my listen language
+    if (ev.speakerId === peerIdRef.current) return;
+    if (ev.targetLang !== captionLangRef.current) return;
+    if (!ev.data) return;
+
+    const player = interpretPlayerRef.current;
+    if (!player) return;
+
+    if (ev.format === "pcm16" || ev.format === "wav") {
+      // wav format from host is still raw pcm16 after gateway parse; both use PCM path
+      void player.playPcm16Base64(ev.data, ev.sampleRate || 22050);
+    }
   }, []);
 
   const ensureCall = useCallback(
@@ -191,6 +235,19 @@ export function CallRoom({
     clientRef.current = client;
     micLoopStop.current = false;
 
+    const player = new InterpretPlayer();
+    interpretPlayerRef.current = player;
+    player.setHandlers({
+      onPlayStart: () => {
+        setRemoteVolume(DUCK_VOLUME);
+        setInterpreting(true);
+      },
+      onPlayEnd: () => {
+        setRemoteVolume(1);
+        setInterpreting(false);
+      },
+    });
+
     (async () => {
       try {
         const stream = await getMediaStream();
@@ -239,6 +296,7 @@ export function CallRoom({
             setRemoteStream(null);
             callRef.current?.close();
             callRef.current = null;
+            interpretPlayerRef.current?.stop();
             setStatus("Peer left — waiting…");
           },
           onPeerUpdated: (peer) => {
@@ -268,11 +326,13 @@ export function CallRoom({
             });
           },
           onCaption: upsertCaption,
+          onInterpret: handleInterpret,
           onError: (code, message) => {
             setError(`${code}: ${message}`);
           },
           onStats: (s) => {
             if (s.mtMs != null) setMtMs(s.mtMs);
+            if (s.ttsMs != null) setTtsMs(s.ttsMs);
           },
         });
 
@@ -321,6 +381,8 @@ export function CallRoom({
       joinedRef.current = false;
       void micSourceRef.current?.stop();
       callRef.current?.close();
+      interpretPlayerRef.current?.dispose();
+      interpretPlayerRef.current = null;
       client.leave();
       streamRef.current?.getTracks().forEach((t) => t.stop());
     };
@@ -404,6 +466,7 @@ export function CallRoom({
 
   const ollamaK = ollamaKind(services);
   const sttK = sttKind(services);
+  const ttsK = ttsKind(services);
   const ollamaTitle = services?.ollama
     ? `Translation ready (${services.ollamaModel ?? "model"})`
     : `Translation unavailable${services?.ollamaError ? `: ${services.ollamaError}` : ""}`;
@@ -413,12 +476,23 @@ export function CallRoom({
       : services?.stt === "loading" || !services
         ? "Initializing speech recognition…"
         : `Speech recognition error${services?.sttError ? `: ${services.sttError}` : ""}`;
+  const ttsTitle =
+    services?.tts === "ready"
+      ? `Spoken interpretation ready (${services.ttsEngine ?? "say"})`
+      : services?.tts === "loading" || !services || services.tts == null
+        ? "Checking host TTS…"
+        : `Spoken interpretation unavailable${services?.ttsError ? `: ${services.ttsError}` : ""}`;
 
   const showSttLoading =
     services != null && services.stt === "loading";
   const showOllamaBad = services != null && !services.ollama;
   const showSttBad = services != null && (services.stt === "error" || services.stt === "unavailable");
-  const hasAlerts = showSttLoading || showOllamaBad || showSttBad || !!error;
+  const showTtsBad =
+    services != null &&
+    services.tts != null &&
+    (services.tts === "error" || services.tts === "unavailable");
+  const hasAlerts =
+    showSttLoading || showOllamaBad || showSttBad || showTtsBad || !!error;
   const showLanPanel =
     waitingForPeer && (shareIsLoopback || pageIsLoopback || !!lanHost);
 
@@ -462,9 +536,22 @@ export function CallRoom({
                 Translate
               </span>
               <span
+                className={servicePillClass(ttsK)}
+                title={ttsTitle}
+                aria-label={ttsTitle}
+              >
+                {interpreting ? "Speaking…" : "Voice"}
+              </span>
+              <span
                 className="room-stat"
-                title={mtMs != null ? `Caption delay ${mtMs} ms` : "Caption delay"}
-                aria-label={mtMs != null ? `${mtMs} ms` : "No delay recorded"}
+                title={
+                  mtMs != null || ttsMs != null
+                    ? `MT ${mtMs ?? "—"} ms · TTS ${ttsMs ?? "—"} ms`
+                    : "Interpreter delay"
+                }
+                aria-label={
+                  mtMs != null ? `${mtMs} ms translate` : "No delay recorded"
+                }
               >
                 {mtMs != null ? `${mtMs} ms` : "—"}
               </span>
@@ -472,8 +559,8 @@ export function CallRoom({
                 className="room-stat"
                 title={
                   pcmSent > 0
-                    ? `Caption mic → gateway (${pcmSent} chunks). Level ${(micLevel * 100).toFixed(0)}%`
-                    : "Caption mic feed idle"
+                    ? `Mic → gateway (${pcmSent} chunks). Level ${(micLevel * 100).toFixed(0)}%`
+                    : "Mic feed idle"
                 }
               >
                 {pcmSent > 0
@@ -536,9 +623,9 @@ export function CallRoom({
           <strong className="room-lan-title">Inviting someone on another computer</strong>
           <p className="room-lan-lead">
             <strong>One-click (no guest setup):</strong> run{" "}
-            <code>npm run host:public</code> on this Mac, set Caption gateway to
-            the printed <code>wss://…trycloudflare.com</code>, then Share access
-            link.
+            <code>npm run host:public</code> on this Mac, set Interpreter gateway
+            to the printed <code>wss://…trycloudflare.com</code>, then Share
+            access link.
           </p>
           <p className="room-lan-lead">
             <strong>Same Wi‑Fi fallback:</strong> use LAN IP (not{" "}
@@ -575,7 +662,7 @@ export function CallRoom({
                 </button>
               </div>
               <div className="room-lan-row">
-                <span className="room-lan-label">Caption gateway</span>
+                <span className="room-lan-label">Interpreter gateway</span>
                 <code className="room-lan-value">
                   {buildLanGatewayUrl(lanHost)}
                 </code>
@@ -583,7 +670,7 @@ export function CallRoom({
                   type="button"
                   className="btn btn-secondary btn-compact"
                   onClick={copyGatewayUrl}
-                  aria-label="Copy caption gateway URL"
+                  aria-label="Copy interpreter gateway URL"
                 >
                   Copy
                 </button>
@@ -591,8 +678,8 @@ export function CallRoom({
             </div>
           )}
           <p id="lan-join-hint" className="field-hint">
-            On the other computer: open the session link, then paste the caption
-            gateway address into the lobby.
+            On the other computer: open the session link, then paste the
+            interpreter gateway address into the lobby.
           </p>
           {lanHint && <p className="field-hint">{lanHint}</p>}
         </div>
@@ -615,8 +702,8 @@ export function CallRoom({
                   : undefined
               }
             >
-              Translation isn&apos;t available right now. You&apos;ll still see
-              captions in the spoken language.
+              Translation isn&apos;t available right now. Spoken interpretation
+              and subtitles need Ollama running on the host Mac.
             </div>
           )}
           {showSttBad && (
@@ -624,6 +711,13 @@ export function CallRoom({
               Speech recognition couldn&apos;t start
               {services?.sttError ? `: ${services.sttError}` : ""}. Check that
               the gateway is running.
+            </div>
+          )}
+          {showTtsBad && (
+            <div className="banner warn" role="status">
+              Spoken interpretation isn&apos;t available
+              {services?.ttsError ? `: ${services.ttsError}` : ""}. Host TTS uses
+              macOS <code>say</code> on the machine running the gateway.
             </div>
           )}
           {error && (
@@ -645,16 +739,19 @@ export function CallRoom({
           waitingForPeer={waitingForPeer}
           needClickToPlay={needClickToPlay}
           onUserPlay={() => setNeedClickToPlay(false)}
+          remoteVolume={remoteVolume}
         />
 
-        <div className="caption-dock">
-          <CaptionOverlay
-            lines={captions}
-            showOriginal={showOriginal}
-            selfPeerId={peerId}
-            docked
-          />
-        </div>
+        {showSubtitles && (
+          <div className="caption-dock">
+            <CaptionOverlay
+              lines={captions}
+              showOriginal={showOriginal}
+              selfPeerId={peerId}
+              docked
+            />
+          </div>
+        )}
       </div>
 
       {remotePeer && (
@@ -701,19 +798,33 @@ export function CallRoom({
           <label className="check-label">
             <input
               type="checkbox"
-              checked={showOriginal}
-              onChange={(e) => setShowOriginal(e.target.checked)}
-              aria-describedby="show-original-hint"
+              checked={showSubtitles}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setShowSubtitles(on);
+                localStorage.setItem(SUBTITLES_KEY, on ? "1" : "0");
+              }}
             />
-            Show source language
+            Subtitles
           </label>
+          {showSubtitles && (
+            <label className="check-label">
+              <input
+                type="checkbox"
+                checked={showOriginal}
+                onChange={(e) => setShowOriginal(e.target.checked)}
+                aria-describedby="show-original-hint"
+              />
+              Show source language
+            </label>
+          )}
           <span id="show-original-hint" className="sr-only">
-            Displays the original spoken text beneath each translated caption
+            Displays the original spoken text beneath each translated subtitle
           </span>
         </div>
         <div className="toolbar-langs">
           <div className="field">
-            <label htmlFor="speak">Spoken language</label>
+            <label htmlFor="speak">I speak</label>
             <select
               id="speak"
               value={speakLang}
@@ -727,7 +838,7 @@ export function CallRoom({
             </select>
           </div>
           <div className="field">
-            <label htmlFor="caption">Caption language</label>
+            <label htmlFor="caption">I listen in</label>
             <select
               id="caption"
               value={captionLang}
@@ -744,8 +855,10 @@ export function CallRoom({
       </div>
 
       <p className="room-footer consent-note">
-        This session is not recorded. Captions are processed locally and fade
-        when the call ends.
+        Digital interpreter: you hear the other person spoken in your listen
+        language (host Mac TTS). Original voice is ducked while translation
+        plays. Subtitles optional. Nothing is recorded; processing stays on the
+        host machine.
       </p>
     </div>
   );

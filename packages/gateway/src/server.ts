@@ -25,6 +25,7 @@ import { checkOllama } from "./mt-ollama.js";
 import { qualitySummary, resolveQuality } from "./quality.js";
 import { getSttLoadState, preloadAsr } from "./stt-local.js";
 import { listLanIpv4 } from "./lan.js";
+import { getTtsHealth, refreshTtsHealth } from "./tts.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load monorepo root .env
@@ -64,6 +65,7 @@ function sttServiceState(): ServiceState {
 
 function currentServices(): GatewayServices {
   const stt = getSttLoadState();
+  const tts = getTtsHealth();
   return {
     ollama: ollamaSnap.ok,
     ollamaModel: ollamaSnap.model,
@@ -71,6 +73,9 @@ function currentServices(): GatewayServices {
     stt: sttServiceState(),
     sttModel: stt.model,
     sttError: stt.error,
+    tts: tts.tts,
+    ttsEngine: tts.ttsEngine,
+    ttsError: tts.ttsError,
   };
 }
 
@@ -102,9 +107,11 @@ const server = http.createServer((req, res) => {
 
   if (req.url === "/health") {
     void (async () => {
-      // Refresh Ollama on health probes so UI can re-check without restart
+      // Refresh Ollama + TTS on health probes so UI can re-check without restart
       ollamaSnap = await checkOllama();
+      await refreshTtsHealth();
       const stt = getSttLoadState();
+      const tts = getTtsHealth();
       res.writeHead(200, { "Content-Type": "application/json", ...cors });
       res.end(
         JSON.stringify({
@@ -121,6 +128,9 @@ const server = http.createServer((req, res) => {
           stt: sttServiceState(),
           sttModel: stt.model,
           sttError: stt.error,
+          tts: tts.tts,
+          ttsEngine: tts.ttsEngine,
+          ttsError: tts.ttsError,
           services: currentServices(),
         }),
       );
@@ -372,7 +382,7 @@ server.listen(PORT, HOST, () => {
   if (lanIps.length > 0) {
     console.log(`LAN: ${lanIps.map((ip) => `ws://${ip}:${PORT}`).join(", ")}`);
     console.log(
-      `Remote peers: set Caption gateway to ws://<one-of-above> (not 127.0.0.1)`,
+      `Remote peers: set Interpreter gateway to ws://<one-of-above> (not 127.0.0.1)`,
     );
   }
   resolveQuality();
@@ -413,6 +423,16 @@ server.listen(PORT, HOST, () => {
         "Start Ollama and pull the model, e.g. `ollama pull llama3` or `ollama pull llama3.2:3b`",
       );
     }
+
+    const tts = await refreshTtsHealth();
+    if (tts.tts === "ready") {
+      console.log(`TTS: ready (engine ${tts.ttsEngine}) — spoken interpretation on`);
+    } else {
+      console.warn(
+        `TTS: ${tts.tts}${tts.ttsError ? ` — ${tts.ttsError}` : ""} (spoken interpretation unavailable)`,
+      );
+    }
+
     broadcastServices(wss);
 
     // Refresh Ollama periodically so clients see recovery without restart

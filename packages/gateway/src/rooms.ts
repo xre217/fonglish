@@ -83,3 +83,20 @@ export function broadcastCaption(
     if (msg) send(viewer.ws, msg);
   }
 }
+
+/**
+ * Send spoken interpretation only to remote peers listening in `targetLang`.
+ * Never sends to the speaker (avoids self-echo of translated speech).
+ */
+export function sendInterpretToListeners(
+  room: Room,
+  fromSpeakerId: string,
+  targetLang: LangCode,
+  msg: ServerMessage,
+): void {
+  for (const viewer of room.peers.values()) {
+    if (viewer.peerId === fromSpeakerId) continue;
+    if (viewer.captionLang !== targetLang) continue;
+    send(viewer.ws, msg);
+  }
+}

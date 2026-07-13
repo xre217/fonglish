@@ -22,6 +22,26 @@ export type CaptionEvent = {
   ts: number;
 };
 
+/**
+ * Host-synthesized spoken interpretation for one target language.
+ * Clients play this when speakerId !== self and targetLang matches listen lang.
+ */
+export type InterpretEvent = {
+  utteranceId: string;
+  speakerId: string;
+  speakerName: string;
+  sourceLang: LangCode;
+  targetLang: LangCode;
+  /** Translated text (a11y / optional subtitles) */
+  text: string;
+  isFinal: true;
+  format: "pcm16" | "wav";
+  sampleRate: number;
+  /** base64-encoded audio payload */
+  data: string;
+  ts: number;
+};
+
 /** Client → gateway JSON messages */
 export type ClientMessage =
   | {
@@ -121,6 +141,10 @@ export type ServerMessage =
       caption: CaptionEvent;
     }
   | {
+      type: "interpret";
+      interpret: InterpretEvent;
+    }
+  | {
       type: "error";
       code: string;
       message: string;
@@ -129,6 +153,7 @@ export type ServerMessage =
       type: "stats";
       sttMs?: number;
       mtMs?: number;
+      ttsMs?: number;
     }
   | {
       type: "services";
@@ -153,6 +178,10 @@ export type GatewayServices = {
   stt: ServiceState;
   sttModel?: string;
   sttError?: string;
+  /** Host TTS (macOS say) for spoken interpretation */
+  tts: ServiceState;
+  ttsEngine?: string;
+  ttsError?: string;
 };
 
 /** Audio constants for PCM capture (16 kHz mono — Whisper-friendly). */

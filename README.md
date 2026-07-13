@@ -1,14 +1,15 @@
 # Fonglish
 
-Real-time **bilingual subtitles** for 1:1 video calls.
+Real-time **digital interpreter** for 1:1 video calls — hear the other person **spoken in your language**.
 
-Private **caption companion** direction: works **alongside** video apps (Zoom, Meet, etc.) long-term. Today’s ship is a **browser WebRTC harness** + local gateway so you can test STT/MT without cloud tokens.
+Optional **subtitles** (off by default). Long-term direction: companion alongside Zoom/Meet; today’s ship is a **browser WebRTC harness** + local Mac gateway (no cloud AI tokens).
 
 - Browser **WebRTC** call (camera + mic)
-- Each speaker streams **their own mic** to a Node **caption gateway**
-- **Local Whisper STT** (energy VAD + Transformers.js) → **Ollama translation** → live captions
-- **Windows / macOS / Linux** supported for the current stack (Node + browser)
-- Designed so a later **desktop companion** reuses the same gateway by swapping only the audio source
+- Each speaker streams **their own mic** to a Node **interpreter gateway**
+- **Local Whisper STT** → **Ollama translation** → **macOS `say` TTS** → listener hears interpretation
+- Original remote voice is **ducked** while translation plays
+- **Subtitles** optional in-call toggle (default off)
+- Host Mac runs STT/MT/TTS; Windows guests need only a browser + shared link
 
 ## Prerequisites
 
@@ -32,7 +33,7 @@ ollama pull llama3          # recommended for translation quality
 **Mac host:** must stay online (runs Whisper + Ollama + free Cloudflare tunnel).
 
 ```bash
-# Terminal 1 — caption brain
+# Terminal 1 — interpreter brain (Whisper + Ollama + macOS say TTS)
 npm run gateway
 
 # Terminal 2 — public WSS tunnel (free Cloudflare quick tunnel)
@@ -42,9 +43,10 @@ npm run host:public
 When the tunnel prints `wss://….trycloudflare.com`:
 
 1. On the Mac open http://127.0.0.1:3000 (or the Vercel lobby).
-2. Paste that **wss://** URL into **Caption gateway**.
-3. Start a session → **Share access link**.
-4. Send that link to Windows. It looks like:
+2. Paste that **wss://** URL into **Interpreter gateway** (not the placeholder with `…`).
+3. Set **I speak** / **I listen in** (e.g. host: speak English, listen Spanish; guest opposite).
+4. Start a session → **Share access link**.
+5. Send that link to Windows. It looks like:
 
 ```text
 https://fonglish.vercel.app/room/<id>?gw=wss://xxxx.trycloudflare.com
@@ -96,7 +98,7 @@ npm run env:init
 
 npm install
 
-# terminal 1 — caption brain (Whisper + Ollama)
+# terminal 1 — interpreter brain (Whisper + Ollama + say TTS)
 npm run gateway
 
 # terminal 2 — UI (or use the Vercel deploy and skip this)
@@ -104,6 +106,8 @@ npm run web
 ```
 
 Open **http://127.0.0.1:3000** (or your Vercel URL) in two browser profiles.
+
+**Language pairing:** Peer A speak=en / listen=es, Peer B speak=es / listen=en. Each hears the other **spoken** in their listen language. Turn on **Subtitles** in the room toolbar if you want text.
 
 ## Deploy UI on Vercel
 
@@ -118,9 +122,9 @@ npx vercel --prod
 | Piece | Where it runs |
 |-------|----------------|
 | Lobby + call UI | **Vercel** (Next.js) |
-| WebSocket signaling + STT + MT | **Your machine** (`npm run gateway`) |
+| WebSocket signaling + STT + MT + TTS | **Your Mac** (`npm run gateway`) |
 
-On the lobby page, set **Caption gateway** to `ws://127.0.0.1:8787` (default). Start the gateway before joining a room.
+On the lobby page, set **Interpreter gateway** to `ws://127.0.0.1:8787` (default). Start the gateway before joining a room. Spoken interpretation uses macOS `say` (host only).
 
 ```bash
 npm run gateway   # keep running on the machine that does STT/MT
@@ -137,9 +141,9 @@ Monorepo build uses `npm run vercel-build` (shared + audio + web only — not th
 1. Create a room → **Copy invite**
 2. Open the link on the other side (name + languages on the lobby)
 3. Allow camera/mic
-4. Speak — captions appear, translated into each person’s **Captions in** language
+4. Speak a full sentence and pause — the other person **hears** the translation (host TTS). Enable **Subtitles** if you want text.
 
-> Whisper ONNX downloads on first gateway start (~75MB). Ollama loads the model on first translation.
+> Whisper ONNX downloads on first gateway start (~75MB). Ollama loads the model on first translation. TTS uses built-in macOS voices (`say`).
 
 ### Windows notes
 
@@ -223,7 +227,11 @@ Gateway protocol stays the same: binary PCM frames in → `caption` events out. 
 | `WHISPER_MODEL` | from preset | e.g. `Xenova/whisper-base` |
 | `MT_ON_PARTIAL` | `0` | Set `1` to translate interim STT |
 | `MT_GLOSSARY` | — | Comma-separated terms / `src=tgt` |
-| `GATEWAY_PORT` | `8787` | Caption gateway |
+| `TTS_ENABLED` | `1` | Set `0` to disable spoken interpretation |
+| `TTS_ENGINE` | `say` | macOS host TTS (`none` to disable) |
+| `TTS_RATE` | `200` | `say -r` speaking rate |
+| `TTS_VOICE_EN` / `_ES` / … | system map | Override `say -v` voice per language |
+| `GATEWAY_PORT` | `8787` | Interpreter gateway |
 | `GATEWAY_HOST` | `0.0.0.0` | Bind all interfaces (LAN-friendly) |
 | `NEXT_PUBLIC_GATEWAY_URL` | `ws://127.0.0.1:8787` | Browser WS URL |
 | `NEXT_PUBLIC_GATEWAY_PORT` | `8787` | Used if URL not set |
@@ -232,11 +240,11 @@ Gateway protocol stays the same: binary PCM frames in → `caption` events out. 
 
 Client → gateway JSON: `join`, `leave`, `update_langs`, `signal`, `mute`  
 Client → gateway binary: raw PCM16 LE mono @ 16 kHz (~100 ms chunks)  
-Gateway → client: `welcome`, `peer_joined`, `peer_left`, `signal`, `caption`, `error`, `stats`, `services`
+Gateway → client: `welcome`, `peer_joined`, `peer_left`, `signal`, `caption`, `interpret`, `error`, `stats`, `services`
 
 ## Privacy note
 
-This MVP runs **STT and translation on your machine** (Whisper ONNX + Ollama). Mic PCM is sent only to the local caption gateway. A consent note is shown in-call. No server-side transcript store is implemented.
+This MVP runs **STT, translation, and TTS on the host Mac** (Whisper ONNX + Ollama + `say`). Mic PCM is sent only to the local interpreter gateway. A consent note is shown in-call. No server-side transcript store is implemented.
 
 ## Out of scope (v1)
 
@@ -252,7 +260,9 @@ This MVP runs **STT and translation on your machine** (Whisper ONNX + Ollama). M
 | “WebSocket error” | Gateway running? `http://127.0.0.1:8787/health` |
 | WS works on Mac, fails on Windows | Use `127.0.0.1` not `localhost` in `NEXT_PUBLIC_GATEWAY_URL` |
 | Firewall blocked | Windows: allow Node for ports 8787 & 3000 |
-| No captions | Ollama running? Model pulled? **STT**/**MT** pills green? Mic unmuted? |
+| No spoken translation | Ollama + TTS ready? **Speech**/**Translate**/**Voice** pills green? Complementary **I speak** / **I listen in**? Pause after a full sentence. |
+| No subtitles | Turn on **Subtitles** in the room toolbar (off by default). |
+| TTS / Voice pill bad | Host must be macOS with `say` + `afconvert`. Check `TTS_VOICE_*` names (`say -v '?'`). |
 | MT errors | `OLLAMA_MT_MODEL` matches a pulled model? `ollama run llama3.2:3b` |
 | STT pill yellow | Whisper loading — wait for gateway log `STT: ready` |
 | onnx / native errors after clone | Delete `node_modules`, run `npm install` **on that machine** (native binaries are OS-specific) |

@@ -2,12 +2,18 @@ import type {
   CaptionEvent,
   ClientMessage,
   GatewayServices,
+  InterpretEvent,
   LangCode,
   PeerInfo,
   ServerMessage,
   SignalPayload,
 } from "@fonglish/shared";
-import { resolveGatewayUrl, formatWsError } from "./gateway-url";
+import {
+  resolveGatewayUrl,
+  formatWsError,
+  isValidWsUrl,
+  normalizeWsUrl,
+} from "./gateway-url";
 
 export type CaptionClientHandlers = {
   onWelcome?: (
@@ -21,8 +27,9 @@ export type CaptionClientHandlers = {
   onPeerUpdated?: (peer: PeerInfo) => void;
   onSignal?: (fromId: string, payload: SignalPayload) => void;
   onCaption?: (caption: CaptionEvent) => void;
+  onInterpret?: (interpret: InterpretEvent) => void;
   onError?: (code: string, message: string) => void;
-  onStats?: (stats: { sttMs?: number; mtMs?: number }) => void;
+  onStats?: (stats: { sttMs?: number; mtMs?: number; ttsMs?: number }) => void;
   onServices?: (services: GatewayServices) => void;
   onOpen?: () => void;
   onClose?: () => void;
@@ -34,8 +41,30 @@ export class CaptionClient {
 
   connect(handlers: CaptionClientHandlers): void {
     this.handlers = handlers;
-    const url = resolveGatewayUrl();
-    const ws = new WebSocket(url);
+    const url = normalizeWsUrl(resolveGatewayUrl());
+
+    if (!isValidWsUrl(url)) {
+      this.handlers.onError?.("ws_error", formatWsError(url));
+      return;
+    }
+    // HTTPS page + plain ws:// → browsers throw (Safari: "pattern", Chrome: construct failed)
+    if (
+      typeof window !== "undefined" &&
+      window.location.protocol === "https:" &&
+      url.startsWith("ws://")
+    ) {
+      this.handlers.onError?.("ws_error", formatWsError(url));
+      return;
+    }
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.handlers.onError?.("ws_error", formatWsError(url, detail));
+      return;
+    }
     ws.binaryType = "arraybuffer";
     this.ws = ws;
 
@@ -77,11 +106,18 @@ export class CaptionClient {
         case "caption":
           this.handlers.onCaption?.(msg.caption);
           break;
+        case "interpret":
+          this.handlers.onInterpret?.(msg.interpret);
+          break;
         case "error":
           this.handlers.onError?.(msg.code, msg.message);
           break;
         case "stats":
-          this.handlers.onStats?.({ sttMs: msg.sttMs, mtMs: msg.mtMs });
+          this.handlers.onStats?.({
+            sttMs: msg.sttMs,
+            mtMs: msg.mtMs,
+            ttsMs: msg.ttsMs,
+          });
           break;
         case "services":
           this.handlers.onServices?.(msg.services);

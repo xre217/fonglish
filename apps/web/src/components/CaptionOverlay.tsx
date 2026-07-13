@@ -40,8 +40,8 @@ export function CaptionOverlay({
         role="status"
       >
         <span className="muted">
-          Listening… say a full sentence, then pause — translated captions appear
-          here.
+          Listening… say a full sentence, then pause — translated subtitles appear
+          here. Spoken interpretation plays automatically.
         </span>
       </div>
     );

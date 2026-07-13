@@ -12,8 +12,10 @@ import {
   isHostedUi,
   isLoopbackHost,
   isPublicGatewayUrl,
+  isValidWsUrl,
   loadGatewayUrlSetting,
   localWebBaseUrl,
+  normalizeWsUrl,
   redirectHostedToLocalWeb,
   saveGatewayUrlSetting,
 } from "@/lib/gateway-url";
@@ -77,20 +79,43 @@ export default function LobbyPage() {
   };
 
   const goRoom = async (roomId: string) => {
-    persist();
+    const gw = normalizeWsUrl(gatewayUrl);
+    setGatewayUrl(gw);
+    localStorage.setItem(NAME_KEY, displayName.trim());
+    localStorage.setItem(SPEAK_KEY, speakLang);
+    localStorage.setItem(CAPTION_KEY, captionLang);
+    saveGatewayUrlSetting(gw);
     setHostedHint(null);
+
+    if (!isValidWsUrl(gw)) {
+      const looksLikePlaceholder =
+        /…|\.\.\./.test(gatewayUrl) || /wss:\/\/\.?trycloudflare/i.test(gw);
+      setHostedHint(
+        looksLikePlaceholder
+          ? `That’s the example text, not a real tunnel. On the Mac, copy the full line printed by "npm run host:public" (looks like wss://random-words-here.trycloudflare.com) and paste that.`
+          : `Caption gateway URL looks invalid. On the Mac run "npm run host:public" and paste the printed wss://… URL (full hostname, no …). Got: ${gatewayUrl || "(empty)"}`,
+      );
+      return;
+    }
+    if (hostedUi && gw.startsWith("ws://")) {
+      setHostedHint(
+        `This HTTPS site cannot use ${gw}. On the Mac run "npm run host:public", paste the printed wss://…trycloudflare.com into Caption gateway, then Start session again.`,
+      );
+      return;
+    }
+
     const qs = new URLSearchParams({
       name: displayName.trim(),
       speak: speakLang,
       caption: captionLang,
     });
-    if (isPublicGatewayUrl(gatewayUrl)) {
-      qs.set("gw", gatewayUrl);
+    if (isPublicGatewayUrl(gw)) {
+      qs.set("gw", gw);
     }
     const path = `${roomPath(roomId)}?${qs.toString()}`;
 
     // Public wss tunnel → join on this origin (Vercel or local)
-    if (isPublicGatewayUrl(gatewayUrl)) {
+    if (isPublicGatewayUrl(gw)) {
       router.push(path);
       return;
     }
@@ -110,7 +135,9 @@ export default function LobbyPage() {
       <div className="lobby-inner lobby-animate">
         <header className="lobby-header">
           <FonglishLogo variant="lobby" />
-          <h1 className="lobby-title">Every word counts, across languages</h1>
+          <h1 className="lobby-title">
+            Digital interpreter — hear them in your language
+          </h1>
         </header>
 
         <div className="card lobby-card">
@@ -137,8 +164,8 @@ export default function LobbyPage() {
                       <code>npm run host:public</code>
                     </li>
                     <li>
-                      Paste <code>wss://…trycloudflare.com</code> into Caption
-                      gateway below
+                      Paste <code>wss://…trycloudflare.com</code> into
+                      Interpreter gateway below
                     </li>
                     <li>Start session → Share access link to Windows</li>
                   </ol>
@@ -160,8 +187,9 @@ export default function LobbyPage() {
               </strong>
               <p className="lobby-hosted-body">
                 Run <code>npm run host:public</code> (gateway must already be
-                up), paste the printed <code>wss://</code> into Caption gateway,
-                then Share from the room. Guests use Vercel only — no Node.
+                up), paste the printed <code>wss://</code> into Interpreter
+                gateway, then Share from the room. Guests use Vercel only — no
+                Node.
               </p>
               {lanGatewayUrl && (
                 <p className="lobby-hosted-body">
@@ -185,7 +213,7 @@ export default function LobbyPage() {
 
             <div className="lobby-langs">
               <div className="field">
-                <label htmlFor="speak">Spoken language</label>
+                <label htmlFor="speak">I speak</label>
                 <select
                   id="speak"
                   value={speakLang}
@@ -199,7 +227,7 @@ export default function LobbyPage() {
                 </select>
               </div>
               <div className="field">
-                <label htmlFor="caption">Caption language</label>
+                <label htmlFor="caption">I listen in</label>
                 <select
                   id="caption"
                   value={captionLang}
@@ -215,12 +243,12 @@ export default function LobbyPage() {
             </div>
 
             <div className="field">
-              <label htmlFor="gateway">Caption gateway</label>
+              <label htmlFor="gateway">Interpreter gateway</label>
               <input
                 id="gateway"
                 type="text"
                 inputMode="text"
-                placeholder="ws://127.0.0.1:8787 or wss://….trycloudflare.com"
+                placeholder="ws://127.0.0.1:8787 or wss://your-tunnel.trycloudflare.com"
                 value={gatewayUrl}
                 onChange={(e) => setGatewayUrl(e.target.value)}
                 spellCheck={false}
@@ -230,9 +258,10 @@ export default function LobbyPage() {
                 data-1p-ignore
               />
               <span id="gateway-hint" className="field-hint">
-                Local: <code>ws://127.0.0.1:8787</code>. One-click guests: paste{" "}
-                <code>wss://</code> from <code>npm run host:public</code>. Do not
-                paste <code>wss://</code> into Chrome flags — only into this box.
+                Host Mac runs STT + translation + spoken voice. Local:{" "}
+                <code>ws://127.0.0.1:8787</code>. Remote guests: paste{" "}
+                <code>wss://</code> from <code>npm run host:public</code>.
+                Subtitles are optional (off by default in-call).
               </span>
             </div>
 
@@ -275,8 +304,9 @@ export default function LobbyPage() {
         </div>
 
         <p className="lobby-footer">
-          Nothing is recorded. One-click mode: host Mac stays on; Windows only
-          needs the shared HTTPS link.
+          Nothing is recorded. You hear the other person spoken in your listen
+          language. One-click mode: host Mac stays on; Windows only needs the
+          shared HTTPS link.
         </p>
       </div>
     </main>

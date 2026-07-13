@@ -47,12 +47,41 @@ export function resolveGatewayUrl(): string {
 
 export function normalizeWsUrl(raw: string): string {
   let u = raw.trim();
+  // Strip quotes/backticks/zero-width junk from copy-paste
+  u = u
+    .replace(/^[\s`'"]+|[\s`'"]+$/g, "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, "");
   if (!u) return "ws://127.0.0.1:8787";
-  if (u.startsWith("https://")) u = `wss://${u.slice("https://".length)}`;
-  if (u.startsWith("http://")) u = `ws://${u.slice("http://".length)}`;
-  if (!u.startsWith("ws://") && !u.startsWith("wss://")) {
-    u = `ws://${u}`;
+
+  // Full invite URL pasted into gateway field → extract ?gw=
+  if (/^https?:\/\//i.test(u) && /[?&]gw=/i.test(u)) {
+    try {
+      const parsed = new URL(u);
+      const gw = parsed.searchParams.get("gw");
+      if (gw) return normalizeWsUrl(gw);
+    } catch {
+      /* fall through */
+    }
   }
+
+  // Protocol-relative //host → wss (tunnels are always TLS)
+  if (u.startsWith("//")) u = `wss:${u}`;
+
+  if (/^https:\/\//i.test(u)) u = `wss://${u.slice(u.indexOf("://") + 3)}`;
+  else if (/^http:\/\//i.test(u)) u = `ws://${u.slice(u.indexOf("://") + 3)}`;
+  else if (/^WSS:\/\//.test(u)) u = `wss://${u.slice(6)}`;
+  else if (/^WS:\/\//.test(u)) u = `ws://${u.slice(5)}`;
+
+  if (!u.startsWith("ws://") && !u.startsWith("wss://")) {
+    // Bare tunnel hostname → secure WS
+    if (/\.trycloudflare\.com$/i.test(u.split("/")[0] ?? "")) {
+      u = `wss://${u}`;
+    } else {
+      u = `ws://${u}`;
+    }
+  }
+
   // Only rewrite pure localhost — keep public tunnel hostnames
   u = u
     .replace("://localhost/", "://127.0.0.1/")
@@ -60,6 +89,20 @@ export function normalizeWsUrl(raw: string): string {
     .replace(/:\/\/localhost$/, "://127.0.0.1")
     .replace("://[::1]", "://127.0.0.1");
   return u.replace(/\/$/, "");
+}
+
+/** True when the browser can construct WebSocket(url). */
+export function isValidWsUrl(raw: string): boolean {
+  try {
+    const u = new URL(normalizeWsUrl(raw));
+    if (u.protocol !== "ws:" && u.protocol !== "wss:") return false;
+    if (!u.hostname) return false;
+    // Reject empty / placeholder hostnames
+    if (u.hostname === "." || u.hostname.includes("…")) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Apply ?gw= from invite URL (one-click Windows path). */
@@ -105,12 +148,13 @@ export function saveShareHost(host: string): void {
 
 export function isPublicGatewayUrl(url: string): boolean {
   const u = normalizeWsUrl(url);
+  if (!isValidWsUrl(u)) return false;
   if (u.startsWith("wss://")) return true;
   // public ws is rare; treat non-loopback as public
   return !isLoopbackGatewayUrl(u);
 }
 
-export function formatWsError(url: string): string {
+export function formatWsError(url: string, detail?: string): string {
   if (typeof window === "undefined") {
     return `WebSocket error — is the gateway running? Tried ${url}`;
   }
@@ -118,11 +162,20 @@ export function formatWsError(url: string): string {
   const protocol = window.location.protocol;
   const isHosted = host.endsWith(".vercel.app");
   const loopback = isLoopbackGatewayUrl(url);
+  const invalid = !isValidWsUrl(url);
+  const mixed =
+    protocol === "https:" && normalizeWsUrl(url).startsWith("ws://");
 
-  if (isHosted && loopback) {
+  if (invalid) {
     return (
-      `This Vercel page needs a public gateway (wss://…). ` +
-      `On the Mac host run: npm run host:public  then share the printed one-click link. Tried ${url}`
+      `Caption gateway URL is invalid (${url || "(empty)"}). ` +
+      `Paste the full wss://…trycloudflare.com value from the Mac (npm run host:public), not the page URL.`
+    );
+  }
+  if (mixed || (isHosted && loopback)) {
+    return (
+      `This HTTPS page cannot use ${url}. ` +
+      `On the Mac: npm run host:public → paste the printed wss://…trycloudflare.com into Caption gateway → Share access link.`
     );
   }
   if (protocol === "https:" && url.startsWith("ws://")) {
@@ -136,6 +189,9 @@ export function formatWsError(url: string): string {
       `Gateway is loopback-only (${url}). Remote PCs cannot reach 127.0.0.1. ` +
       `Run npm run host:public on the host Mac.`
     );
+  }
+  if (detail) {
+    return `Cannot reach the caption gateway at ${url}. ${detail}`;
   }
   return (
     `Cannot reach the caption gateway at ${url}. ` +

@@ -5,12 +5,13 @@ import { translateText } from "./mt-ollama.js";
 import { getMtOnPartial } from "./quality.js";
 import { LocalSttSession } from "./stt-local.js";
 import type { Room, RoomPeer } from "./rooms.js";
-import { broadcastCaption, send } from "./rooms.js";
+import { broadcastCaption, send, sendInterpretToListeners } from "./rooms.js";
+import { synthesizeSpeech, ttsEnabled } from "./tts.js";
 
 /**
- * Per-speaker STT → MT pipeline.
- * Each client streams their own mic; captions are broadcast to the room
- * translated into each viewer's captionLang.
+ * Per-speaker STT → MT → optional host TTS pipeline.
+ * Each client streams their own mic; captions fan out by viewer captionLang;
+ * finals also synthesize spoken interpretation for remote listeners.
  *
  * By default, Ollama runs only on final STT segments (higher accuracy,
  * less flicker). Partials show source text or the last good translation.
@@ -312,6 +313,101 @@ export class SpeakerPipeline {
 
       return { type: "caption", caption };
     });
+
+    // Spoken interpretation (host TTS) — finals only, remote listeners only
+    if (isFinal && ttsEnabled()) {
+      void this.emitInterpretation({
+        generation,
+        sourceLang,
+        speakerId,
+        speakerName,
+        utteranceId,
+        translations,
+        ts,
+      });
+    }
+  }
+
+  private async emitInterpretation(opts: {
+    generation: number;
+    sourceLang: LangCode;
+    speakerId: string;
+    speakerName: string;
+    utteranceId: string;
+    translations: Map<LangCode, string>;
+    ts: number;
+  }): Promise<void> {
+    const {
+      generation,
+      sourceLang,
+      speakerId,
+      speakerName,
+      utteranceId,
+      translations,
+      ts,
+    } = opts;
+
+    // Unique listen langs among remote peers (not the speaker)
+    const listenTargets = new Set<LangCode>();
+    for (const p of this.room.peers.values()) {
+      if (p.peerId === speakerId) continue;
+      if (p.captionLang !== sourceLang) listenTargets.add(p.captionLang);
+    }
+    if (listenTargets.size === 0) return;
+
+    const ttsTimings: number[] = [];
+
+    await Promise.all(
+      [...listenTargets].map(async (targetLang) => {
+        if (generation !== this.captionGeneration) return;
+        const text =
+          translations.get(targetLang) ??
+          translations.get(sourceLang) ??
+          "";
+        const cleaned = text.replace(/\s+/g, " ").trim();
+        if (!cleaned) return;
+
+        try {
+          const audio = await synthesizeSpeech(cleaned, targetLang);
+          if (generation !== this.captionGeneration) return;
+          ttsTimings.push(audio.ms);
+          sendInterpretToListeners(this.room, speakerId, targetLang, {
+            type: "interpret",
+            interpret: {
+              utteranceId,
+              speakerId,
+              speakerName,
+              sourceLang,
+              targetLang,
+              text: cleaned,
+              isFinal: true,
+              format: audio.format,
+              sampleRate: audio.sampleRate,
+              data: audio.pcm.toString("base64"),
+              ts,
+            },
+          });
+          console.log(
+            `[tts] ${audio.ms}ms | ${sourceLang}→${targetLang} | ${cleaned.slice(0, 60)}`,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[tts] ${message}`);
+          send(this.peer.ws, {
+            type: "error",
+            code: "tts_error",
+            message,
+          });
+        }
+      }),
+    );
+
+    if (ttsTimings.length > 0 && generation === this.captionGeneration) {
+      const avg = Math.round(
+        ttsTimings.reduce((a, b) => a + b, 0) / ttsTimings.length,
+      );
+      send(this.peer.ws, { type: "stats", ttsMs: avg });
+    }
   }
 
   async close(): Promise<void> {

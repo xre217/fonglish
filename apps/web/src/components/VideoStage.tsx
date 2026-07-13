@@ -13,6 +13,8 @@ type Props = {
   /** Show a strong "tap for sound" affordance until remote audio unlocks. */
   needClickToPlay?: boolean;
   onUserPlay?: () => void;
+  /** 0–1 volume for remote tile (duck original while interpretation plays). */
+  remoteVolume?: number;
 };
 
 function VideoTile({
@@ -26,6 +28,7 @@ function VideoTile({
   forcePlayToken,
   showPlayHint,
   onPlayClick,
+  volume = 1,
 }: {
   stream: MediaStream | null;
   label: string;
@@ -37,6 +40,7 @@ function VideoTile({
   forcePlayToken?: number;
   showPlayHint?: boolean;
   onPlayClick?: () => void;
+  volume?: number;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [blocked, setBlocked] = useState(false);
@@ -49,7 +53,7 @@ function VideoTile({
       setBlocked(false);
       return;
     }
-    el.volume = 1;
+    el.volume = Math.max(0, Math.min(1, volume));
     const p = el.play();
     if (p !== undefined) {
       void p
@@ -58,11 +62,18 @@ function VideoTile({
     }
   }, [stream, forcePlayToken, muted]);
 
+  // Smooth-ish duck/restore without re-binding the stream
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.volume = Math.max(0, Math.min(1, volume));
+  }, [volume]);
+
   const tryPlay = () => {
     const el = ref.current;
     if (!el) return;
     el.muted = Boolean(muted);
-    el.volume = 1;
+    el.volume = Math.max(0, Math.min(1, volume));
     void el
       .play()
       .then(() => {
@@ -124,6 +135,7 @@ export function VideoStage({
   waitingForPeer = false,
   needClickToPlay = false,
   onUserPlay,
+  remoteVolume = 1,
 }: Props) {
   const [playToken, setPlayToken] = useState(0);
   const remotePlaceholder = waitingForPeer
@@ -176,6 +188,7 @@ export function VideoStage({
         placeholder={remotePlaceholder}
         forcePlayToken={playToken}
         showPlayHint={needClickToPlay && Boolean(remoteStream)}
+        volume={remoteVolume}
         onPlayClick={() => {
           setPlayToken((n) => n + 1);
           onUserPlay?.();
