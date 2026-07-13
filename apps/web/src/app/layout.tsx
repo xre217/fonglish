@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Fonglish — Secure bilingual consultation",
+  title: "Fonglish — Bilingual consultation",
   description:
-    "Private video consultation with real-time translated captions for cross-language client meetings.",
+    "Private video with live translated captions for conversations that cross languages.",
 };
 
 export default function RootLayout({

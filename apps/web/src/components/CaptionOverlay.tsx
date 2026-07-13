@@ -37,7 +37,7 @@ export function CaptionOverlay({
     if (docked) return null;
     return (
       <div className="captions empty" role="status">
-        <span className="muted">Captions will appear when dialogue begins.</span>
+        <span className="muted">Captions appear as you speak.</span>
       </div>
     );
   }
@@ -70,7 +70,7 @@ export function CaptionOverlay({
                 <span>{line.speakerName}</span>
                 {!line.isFinal && (
                   <span className="caption-state partial" aria-hidden>
-                    · live
+                    speaking
                   </span>
                 )}
               </p>

@@ -2,17 +2,20 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { FonglishLogo } from "@/components/FonglishLogo";
 import { LANGUAGES, type LangCode } from "@fonglish/shared";
 import { randomId, roomPath } from "@/lib/ids";
 import {
+  applyGatewayFromSearch,
+  buildLanGatewayUrl,
+  discoverLanIp,
   isHostedUi,
   isLoopbackHost,
+  isPublicGatewayUrl,
   loadGatewayUrlSetting,
   localWebBaseUrl,
   redirectHostedToLocalWeb,
   saveGatewayUrlSetting,
-  discoverLanIp,
-  buildLanGatewayUrl,
 } from "@/lib/gateway-url";
 
 const NAME_KEY = "fong_display_name";
@@ -34,10 +37,19 @@ export default function LobbyPage() {
     () => load(CAPTION_KEY, "es") as LangCode,
   );
   const [joinId, setJoinId] = useState("");
-  const [gatewayUrl, setGatewayUrl] = useState(() => loadGatewayUrlSetting());
+  const [gatewayUrl, setGatewayUrl] = useState(() => {
+    if (typeof window !== "undefined") {
+      const fromLink = applyGatewayFromSearch(
+        new URLSearchParams(window.location.search),
+      );
+      if (fromLink) return fromLink;
+    }
+    return loadGatewayUrlSetting();
+  });
   const [hostedHint, setHostedHint] = useState<string | null>(null);
   const [lanGatewayUrl, setLanGatewayUrl] = useState<string | null>(null);
   const hostedUi = useMemo(() => isHostedUi(), []);
+  const publicGw = isPublicGatewayUrl(gatewayUrl);
   const isLocalLobby = useMemo(
     () =>
       typeof window !== "undefined" &&
@@ -72,12 +84,21 @@ export default function LobbyPage() {
       speak: speakLang,
       caption: captionLang,
     });
+    if (isPublicGatewayUrl(gatewayUrl)) {
+      qs.set("gw", gatewayUrl);
+    }
     const path = `${roomPath(roomId)}?${qs.toString()}`;
-    // Only jumps to 127.0.0.1:3000 if local web is actually running
+
+    // Public wss tunnel → join on this origin (Vercel or local)
+    if (isPublicGatewayUrl(gatewayUrl)) {
+      router.push(path);
+      return;
+    }
+
     if (await redirectHostedToLocalWeb(path)) return;
     if (hostedUi) {
       setHostedHint(
-        `Local web is not running on this PC. In a terminal run: npm run gateway  and  npm run web, then open ${localWebBaseUrl()}${path}`,
+        `For Windows one-click: on the host Mac run "npm run gateway" then "npm run host:public", paste the wss:// URL into Caption gateway, start a room, and Share. Or run local web: ${localWebBaseUrl()}${path}`,
       );
       return;
     }
@@ -88,41 +109,45 @@ export default function LobbyPage() {
     <main className="container lobby">
       <div className="lobby-inner">
         <header className="lobby-header">
-          <p className="lobby-mark">Fonglish</p>
-          <h1 className="lobby-title">Secure bilingual consultation</h1>
+          <FonglishLogo variant="lobby" />
+          <h1 className="lobby-title">Clear conversation, across languages</h1>
           <p className="lobby-lead">
-            Private video with live translated captions. Speech recognition and
-            translation run on your local gateway — not in the cloud.
+            Live video with translated captions. One-click guests use Vercel + a
+            public tunnel; processing can stay on the host Mac.
           </p>
         </header>
 
         <div className="card lobby-card">
           {hostedUi && (
             <div className="banner info lobby-hosted-banner" role="note">
-              <strong className="lobby-hosted-title">Windows / any PC setup</strong>
-              <p className="lobby-hosted-body">
-                Vercel only hosts this UI. On the machine that will process
-                captions, open a terminal in the repo and run:
-              </p>
-              <ol className="lobby-hosted-steps">
-                <li>
-                  <code>npm run gateway</code>
-                </li>
-                <li>
-                  <code>npm run web</code>
-                </li>
-                <li>
-                  Open{" "}
-                  <a href={localWebBaseUrl()}>
-                    {localWebBaseUrl()}
-                  </a>{" "}
-                  (use <strong>127.0.0.1</strong>, not only the Vercel link)
-                </li>
-              </ol>
-              <p className="lobby-hosted-body">
-                If you click a Vercel invite without local web running, the
-                browser cannot open the session — that is expected.
-              </p>
+              <strong className="lobby-hosted-title">
+                {publicGw ? "One-click guest mode" : "Windows one-click (host Mac)"}
+              </strong>
+              {publicGw ? (
+                <p className="lobby-hosted-body">
+                  Public gateway is set. Enter your name and start/join — no
+                  install on this PC.
+                </p>
+              ) : (
+                <>
+                  <p className="lobby-hosted-body">
+                    Host Mac runs the stack; Windows only opens the shared link:
+                  </p>
+                  <ol className="lobby-hosted-steps">
+                    <li>
+                      <code>npm run gateway</code>
+                    </li>
+                    <li>
+                      <code>npm run host:public</code>
+                    </li>
+                    <li>
+                      Paste <code>wss://…trycloudflare.com</code> into Caption
+                      gateway below
+                    </li>
+                    <li>Start session → Share access link to Windows</li>
+                  </ol>
+                </>
+              )}
             </div>
           )}
 
@@ -132,15 +157,21 @@ export default function LobbyPage() {
             </div>
           )}
 
-          {!hostedUi && isLocalLobby && lanGatewayUrl && (
+          {!hostedUi && isLocalLobby && (
             <div className="banner info lobby-lan-banner" role="note">
-              <strong className="lobby-hosted-title">Hosting for another device?</strong>
+              <strong className="lobby-hosted-title">
+                One-click remote guests
+              </strong>
               <p className="lobby-hosted-body">
-                This Mac runs the gateway. A Windows (or other) peer must set{" "}
-                <strong>Caption gateway</strong> to{" "}
-                <code>{lanGatewayUrl}</code> in the lobby —{" "}
-                <code>127.0.0.1</code> only works on this machine.
+                Run <code>npm run host:public</code> (gateway must already be
+                up), paste the printed <code>wss://</code> into Caption gateway,
+                then Share from the room. Guests use Vercel only — no Node.
               </p>
+              {lanGatewayUrl && (
+                <p className="lobby-hosted-body">
+                  Same Wi‑Fi fallback gateway: <code>{lanGatewayUrl}</code>
+                </p>
+              )}
             </div>
           )}
 
@@ -191,7 +222,7 @@ export default function LobbyPage() {
               <label htmlFor="gateway">Caption gateway</label>
               <input
                 id="gateway"
-                placeholder="ws://127.0.0.1:8787"
+                placeholder="ws://127.0.0.1:8787 or wss://….trycloudflare.com"
                 value={gatewayUrl}
                 onChange={(e) => setGatewayUrl(e.target.value)}
                 spellCheck={false}
@@ -199,7 +230,8 @@ export default function LobbyPage() {
                 autoComplete="off"
               />
               <span id="gateway-hint" className="field-hint">
-                Default for local use. On another device, use your host LAN IP.
+                Local: <code>ws://127.0.0.1:8787</code>. One-click guests: paste{" "}
+                <code>wss://</code> from <code>npm run host:public</code>.
               </span>
             </div>
 
@@ -212,7 +244,7 @@ export default function LobbyPage() {
               Start session
             </button>
 
-            <div className="lobby-divider">or join an existing session</div>
+            <div className="lobby-divider">Or join an existing session</div>
 
             <div className="lobby-join">
               <div className="field">
@@ -224,7 +256,7 @@ export default function LobbyPage() {
                   onChange={(e) => setJoinId(e.target.value.trim())}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && canStart && joinId) {
-                      goRoom(joinId.replace(/^\/room\//, ""));
+                      void goRoom(joinId.replace(/^\/room\//, ""));
                     }
                   }}
                 />
@@ -233,7 +265,7 @@ export default function LobbyPage() {
                 type="button"
                 className="btn btn-secondary"
                 disabled={!canStart || !joinId}
-                onClick={() => goRoom(joinId.replace(/^\/room\//, ""))}
+                onClick={() => void goRoom(joinId.replace(/^\/room\//, ""))}
               >
                 Join
               </button>
@@ -242,8 +274,8 @@ export default function LobbyPage() {
         </div>
 
         <p className="lobby-footer">
-          No recording or retention. Quality preset{" "}
-          <code>balanced</code> uses whisper-base and llama3 on your gateway.
+          Nothing is recorded. One-click mode: host Mac stays on; Windows only
+          needs the shared HTTPS link.
         </p>
       </div>
     </main>

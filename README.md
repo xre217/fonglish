@@ -26,6 +26,39 @@ ollama pull llama3          # recommended for translation quality
 # optional smaller/faster: ollama pull llama3.2:3b
 ```
 
+## Windows one-click (no guest setup)
+
+**Windows guest:** open one HTTPS link — no Node, no Chrome flags.  
+**Mac host:** must stay online (runs Whisper + Ollama + free Cloudflare tunnel).
+
+```bash
+# Terminal 1 — caption brain
+npm run gateway
+
+# Terminal 2 — public WSS tunnel (free Cloudflare quick tunnel)
+npm run host:public
+```
+
+When the tunnel prints `wss://….trycloudflare.com`:
+
+1. On the Mac open http://127.0.0.1:3000 (or the Vercel lobby).
+2. Paste that **wss://** URL into **Caption gateway**.
+3. Start a session → **Share access link**.
+4. Send that link to Windows. It looks like:
+
+```text
+https://fonglish.vercel.app/room/<id>?gw=wss://xxxx.trycloudflare.com
+```
+
+Guest clicks → camera works (HTTPS) → joins your Mac gateway through the tunnel.
+
+| Role | Needs |
+|------|--------|
+| Mac host | `gateway` + `host:public` running |
+| Windows guest | Browser only + the shared link |
+
+Quick tunnels change URL each restart; re-copy the link after restarting `host:public`.
+
 ## Caption quality (local, $0)
 
 Accuracy is **STT × MT**. Defaults use the **balanced** preset (better than the old tiny/3B demo stack).

@@ -69,8 +69,8 @@ export function VideoStage({
   waitingForPeer = false,
 }: Props) {
   const remotePlaceholder = waitingForPeer
-    ? "Awaiting participant"
-    : "Establishing connection";
+    ? "Waiting for your guest"
+    : "Connecting…";
 
   const localLabel = [
     localName,
@@ -103,7 +103,7 @@ export function VideoStage({
         muted
         mirror
         pip
-        placeholder="Video disabled"
+        placeholder="Camera off"
       />
     </div>
   );

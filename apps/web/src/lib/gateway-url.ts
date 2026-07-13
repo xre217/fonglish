@@ -1,15 +1,20 @@
-/** localStorage key for optional gateway override (Vercel UI → local gateway). */
+/** localStorage key for optional gateway override. */
 export const GATEWAY_URL_KEY = "fong_gateway_url";
-/** LAN hostname/IP used when building invite links (Mac → Windows). */
+/** LAN hostname/IP used when building LAN invite links. */
 export const SHARE_HOST_KEY = "fong_share_host";
+
+/** Production UI origin for one-click Windows invites. */
+export const DEFAULT_PUBLIC_UI =
+  process.env.NEXT_PUBLIC_SHARE_ORIGIN?.replace(/\/$/, "") ||
+  "https://fonglish.vercel.app";
 
 /**
  * Resolve caption gateway WebSocket URL.
  *
  * Priority:
- * 1. localStorage override (lobby setting)
+ * 1. localStorage (includes ?gw= from invite links)
  * 2. NEXT_PUBLIC_GATEWAY_URL
- * 3. Same host as the page (or 127.0.0.1 when on localhost / Vercel)
+ * 3. Same host as the page / loopback defaults
  */
 export function resolveGatewayUrl(): string {
   if (typeof window !== "undefined") {
@@ -40,7 +45,7 @@ export function resolveGatewayUrl(): string {
   return "ws://127.0.0.1:8787";
 }
 
-function normalizeWsUrl(raw: string): string {
+export function normalizeWsUrl(raw: string): string {
   let u = raw.trim();
   if (!u) return "ws://127.0.0.1:8787";
   if (u.startsWith("https://")) u = `wss://${u.slice("https://".length)}`;
@@ -48,8 +53,26 @@ function normalizeWsUrl(raw: string): string {
   if (!u.startsWith("ws://") && !u.startsWith("wss://")) {
     u = `ws://${u}`;
   }
-  u = u.replace("://localhost", "://127.0.0.1").replace("://[::1]", "://127.0.0.1");
+  // Only rewrite pure localhost — keep public tunnel hostnames
+  u = u
+    .replace("://localhost/", "://127.0.0.1/")
+    .replace("://localhost:", "://127.0.0.1:")
+    .replace(/:\/\/localhost$/, "://127.0.0.1")
+    .replace("://[::1]", "://127.0.0.1");
   return u.replace(/\/$/, "");
+}
+
+/** Apply ?gw= from invite URL (one-click Windows path). */
+export function applyGatewayFromSearch(
+  search: URLSearchParams | { get(name: string): string | null },
+): string | null {
+  const raw = search.get("gw")?.trim();
+  if (!raw) return null;
+  const url = normalizeWsUrl(raw);
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem(GATEWAY_URL_KEY, url);
+  }
+  return url;
 }
 
 export function loadGatewayUrlSetting(): string {
@@ -80,6 +103,13 @@ export function saveShareHost(host: string): void {
   else window.localStorage.removeItem(SHARE_HOST_KEY);
 }
 
+export function isPublicGatewayUrl(url: string): boolean {
+  const u = normalizeWsUrl(url);
+  if (u.startsWith("wss://")) return true;
+  // public ws is rare; treat non-loopback as public
+  return !isLoopbackGatewayUrl(u);
+}
+
 export function formatWsError(url: string): string {
   if (typeof window === "undefined") {
     return `WebSocket error — is the gateway running? Tried ${url}`;
@@ -87,30 +117,29 @@ export function formatWsError(url: string): string {
   const host = window.location.hostname;
   const protocol = window.location.protocol;
   const isHosted = host.endsWith(".vercel.app");
-  const loopback = /:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(url);
+  const loopback = isLoopbackGatewayUrl(url);
 
   if (isHosted && loopback) {
     return (
-      `Cannot reach a local caption gateway from Vercel. ` +
-      `For Mac↔Windows: on the Mac run gateway+web, open http://MAC_LAN_IP:3000 on both machines, ` +
-      `and set Caption gateway to ws://MAC_LAN_IP:8787. Tried ${url}`
+      `This Vercel page needs a public gateway (wss://…). ` +
+      `On the Mac host run: npm run host:public  then share the printed one-click link. Tried ${url}`
     );
   }
   if (protocol === "https:" && url.startsWith("ws://")) {
     return (
-      `This secure page cannot open an insecure WebSocket. ` +
-      `Use http://MAC_LAN_IP:3000 (not https://vercel) for cross-device calls. Tried ${url}`
+      `HTTPS pages require a secure WebSocket (wss://), not ${url}. ` +
+      `Use npm run host:public on the Mac and open the one-click invite.`
     );
   }
   if (loopback) {
     return (
-      `Gateway is loopback-only (${url}). A Windows PC cannot reach your Mac's 127.0.0.1. ` +
-      `On Windows open http://MAC_LAN_IP:3000 and set gateway to ws://MAC_LAN_IP:8787.`
+      `Gateway is loopback-only (${url}). Remote PCs cannot reach 127.0.0.1. ` +
+      `Run npm run host:public on the host Mac.`
     );
   }
   return (
     `Cannot reach the caption gateway at ${url}. ` +
-    `Start npm run gateway on the host and allow firewall ports 3000 & 8787.`
+    `Is the host Mac online with npm run gateway + tunnel?`
   );
 }
 
@@ -129,7 +158,7 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 export function isLoopbackGatewayUrl(url: string): boolean {
-  return /:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/i.test(url);
+  return /:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(url);
 }
 
 export function localWebBaseUrl(): string {
@@ -141,16 +170,9 @@ export function isPrivateLanIp(ip: string): boolean {
   return /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
 }
 
-/**
- * Best-effort LAN IPv4: gateway /health first, then WebRTC ICE.
- */
-export async function discoverLanIp(timeoutMs = 2000): Promise<string | null> {
-  const health = await fetchGatewayHealth();
-  const fromGateway = health?.lanIps?.find(isPrivateLanIp);
-  if (fromGateway) return fromGateway;
-
+export function discoverLanIp(timeoutMs = 2000): Promise<string | null> {
   if (typeof window === "undefined" || typeof RTCPeerConnection === "undefined") {
-    return null;
+    return Promise.resolve(null);
   }
   return new Promise((resolve) => {
     const ips = new Set<string>();
@@ -163,8 +185,7 @@ export async function discoverLanIp(timeoutMs = 2000): Promise<string | null> {
       } catch {
         /* ignore */
       }
-      const lan = [...ips].filter(isPrivateLanIp);
-      resolve(lan[0] ?? null);
+      resolve([...ips].filter(isPrivateLanIp)[0] ?? null);
     };
 
     const pc = new RTCPeerConnection({ iceServers: [] });
@@ -215,6 +236,8 @@ export async function redirectHostedToLocalWeb(
   if (typeof window === "undefined") return false;
   if (!isHostedUi()) return false;
   const gatewayUrl = resolveGatewayUrl();
+  // Public wss tunnel: stay on Vercel (one-click path)
+  if (isPublicGatewayUrl(gatewayUrl)) return false;
   if (!isLoopbackGatewayUrl(gatewayUrl)) return false;
 
   const up = await isLocalWebReachable();
@@ -236,7 +259,7 @@ function gatewayPort(): string {
 }
 
 /**
- * Invite URL for the other person (prefer LAN / public origin over 127.0.0.1).
+ * LAN-oriented share URL (same Wi‑Fi). Prefer oneClickInvite when using tunnel.
  */
 export function buildShareUrl(roomId: string, lanHost?: string | null): string {
   if (typeof window === "undefined") return "";
@@ -250,8 +273,7 @@ export function buildShareUrl(roomId: string, lanHost?: string | null): string {
     ) ||
     "";
 
-  if (hostOverride) {
-    // hostOverride may be "192.168.1.67" or "192.168.1.67:3000"
+  if (hostOverride && !hostOverride.includes("vercel.app")) {
     const hasPort = /:\d+$/.test(hostOverride);
     const origin = hostOverride.startsWith("http")
       ? hostOverride.replace(/\/$/, "")
@@ -264,35 +286,32 @@ export function buildShareUrl(roomId: string, lanHost?: string | null): string {
     return `${window.location.origin}${path}`;
   }
 
-  // Loopback — still return local URL but callers should warn
   return `${window.location.origin}${path}`;
 }
 
-export function gatewayHttpBaseFromWs(wsUrl: string): string {
-  return wsUrl
-    .replace(/^wss:\/\//i, "https://")
-    .replace(/^ws:\/\//i, "http://")
-    .replace(/\/$/, "");
-}
-
-export type GatewayHealth = {
-  ok?: boolean;
-  lanIps?: string[];
-};
-
-/** Probe gateway /health (CORS-enabled) for LAN join hints. */
-export async function fetchGatewayHealth(
-  wsUrl?: string,
-): Promise<GatewayHealth | null> {
-  if (typeof window === "undefined") return null;
-  const base = gatewayHttpBaseFromWs(wsUrl ?? resolveGatewayUrl());
-  try {
-    const res = await fetch(`${base}/health`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as GatewayHealth;
-  } catch {
-    return null;
+/**
+ * One-click invite for remote Windows (no install):
+ * https://fonglish.vercel.app/room/ID?gw=wss://….trycloudflare.com
+ */
+export function buildOneClickInvite(
+  roomId: string,
+  opts?: {
+    gatewayUrl?: string;
+    name?: string;
+    speak?: string;
+    caption?: string;
+  },
+): string {
+  const gw = normalizeWsUrl(opts?.gatewayUrl ?? resolveGatewayUrl());
+  const base = DEFAULT_PUBLIC_UI;
+  const url = new URL(`${base}/room/${encodeURIComponent(roomId)}`);
+  if (isPublicGatewayUrl(gw)) {
+    url.searchParams.set("gw", gw);
   }
+  if (opts?.name) url.searchParams.set("name", opts.name);
+  if (opts?.speak) url.searchParams.set("speak", opts.speak);
+  if (opts?.caption) url.searchParams.set("caption", opts.caption);
+  return url.toString();
 }
 
 export function buildLanGatewayUrl(lanHost: string): string {
@@ -307,4 +326,9 @@ export function isShareUrlLoopback(url: string): boolean {
   } catch {
     return /127\.0\.0\.1|localhost/.test(url);
   }
+}
+
+/** True when we can offer a real one-click remote invite. */
+export function canOneClickInvite(gatewayUrl?: string): boolean {
+  return isPublicGatewayUrl(gatewayUrl ?? resolveGatewayUrl());
 }

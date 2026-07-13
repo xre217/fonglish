@@ -6,15 +6,21 @@ import { isLangCode, type LangCode } from "@fonglish/shared";
 import { CallRoom } from "@/components/CallRoom";
 import { randomId, roomPath } from "@/lib/ids";
 import {
+  applyGatewayFromSearch,
   isHostedUi,
+  isLoopbackGatewayUrl,
+  isPublicGatewayUrl,
+  loadGatewayUrlSetting,
   localWebBaseUrl,
   redirectHostedToLocalWeb,
+  resolveGatewayUrl,
 } from "@/lib/gateway-url";
 
 export function RoomClient({ roomId }: { roomId: string }) {
   const search = useSearchParams();
   const [blocked, setBlocked] = useState(false);
   const [checking, setChecking] = useState(true);
+  const [ready, setReady] = useState(false);
 
   const qs = search.toString();
   const pathWithQuery = `${roomPath(roomId)}${qs ? `?${qs}` : ""}`;
@@ -22,20 +28,52 @@ export function RoomClient({ roomId }: { roomId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!isHostedUi()) {
-        if (!cancelled) setChecking(false);
+      // Persist invite gateway before connecting (one-click ?gw=)
+      if (search.get("gw")) {
+        applyGatewayFromSearch(search);
+      }
+
+      const gw = resolveGatewayUrl();
+      const publicMode = isPublicGatewayUrl(gw);
+
+      // One-click path: Vercel + public wss — no local install
+      if (publicMode) {
+        if (!cancelled) {
+          setBlocked(false);
+          setChecking(false);
+          setReady(true);
+        }
         return;
       }
-      const redirected = await redirectHostedToLocalWeb(pathWithQuery);
-      if (cancelled) return;
-      if (redirected) return; // navigating away
-      setBlocked(true);
-      setChecking(false);
+
+      if (!isHostedUi()) {
+        if (!cancelled) {
+          setChecking(false);
+          setReady(true);
+        }
+        return;
+      }
+
+      // Hosted UI + loopback gateway only: try local web, else block with help
+      if (isLoopbackGatewayUrl(gw) || isLoopbackGatewayUrl(loadGatewayUrlSetting())) {
+        const redirected = await redirectHostedToLocalWeb(pathWithQuery);
+        if (cancelled) return;
+        if (redirected) return;
+        setBlocked(true);
+        setChecking(false);
+        setReady(false);
+        return;
+      }
+
+      if (!cancelled) {
+        setChecking(false);
+        setReady(true);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [pathWithQuery]);
+  }, [pathWithQuery, search]);
 
   const displayName = search.get("name")?.trim() || "Guest";
   const speakRaw = search.get("speak") ?? "en";
@@ -53,11 +91,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
     return id;
   }, [roomId]);
 
-  if (checking && isHostedUi()) {
+  if (checking) {
     return (
       <main className="container lobby">
         <div className="card lobby-card">
-          <p className="muted">Checking for local Fonglish on this PC…</p>
+          <p className="muted">Connecting…</p>
         </div>
       </main>
     );
@@ -70,42 +108,44 @@ export function RoomClient({ roomId }: { roomId: string }) {
         <div className="lobby-inner">
           <div className="card lobby-card">
             <h1 className="lobby-title" style={{ fontSize: "1.35rem" }}>
-              Local app not running
+              Need a one-click invite
             </h1>
             <p className="lobby-lead muted">
-              This invite opened on Vercel. Captions need Fonglish running on{" "}
-              <strong>this Windows PC</strong> (or the host machine). The browser
-              cannot open a session on <code>127.0.0.1</code> until you start it.
+              This link has no public gateway (<code>gw=wss://…</code>). Either
+              ask the host for a one-click link from{" "}
+              <code>npm run host:public</code>, or run Fonglish locally on this
+              PC.
             </p>
-            <div className="banner warn" role="alert">
+            <div className="banner info" role="status">
+              <strong>Host (Mac)</strong>
               <ol className="lobby-hosted-steps">
-                <li>
-                  Install Node 20+ and clone the repo if needed
-                </li>
-                <li>
-                  <code>npm install</code>
-                </li>
                 <li>
                   <code>npm run gateway</code>
                 </li>
                 <li>
-                  <code>npm run web</code>
+                  <code>npm run host:public</code>
+                </li>
+                <li>Create a room and Share access link (includes tunnel)</li>
+              </ol>
+            </div>
+            <div className="banner warn" role="note">
+              <strong>This PC (optional local install)</strong>
+              <ol className="lobby-hosted-steps">
+                <li>
+                  <code>npm run gateway</code> + <code>npm run web</code>
                 </li>
                 <li>
-                  Open this link:{" "}
-                  <a href={localUrl}>{localUrl}</a>
+                  Open <a href={localUrl}>{localUrl}</a>
                 </li>
               </ol>
             </div>
-            <p className="field-hint">
-              Prefer <code>http://127.0.0.1:3000</code> over{" "}
-              <code>localhost</code> on Windows.
-            </p>
           </div>
         </div>
       </main>
     );
   }
+
+  if (!ready) return null;
 
   return (
     <CallRoom

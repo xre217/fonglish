@@ -12,16 +12,20 @@ import {
 import { CaptionClient } from "@/lib/caption-client";
 import {
   buildLanGatewayUrl,
+  buildOneClickInvite,
   buildShareUrl,
+  canOneClickInvite,
   discoverLanIp,
   isLoopbackHost,
   isShareUrlLoopback,
   loadShareHost,
+  resolveGatewayUrl,
   saveShareHost,
 } from "@/lib/gateway-url";
 import { CallPeer, getMediaStream } from "@/lib/webrtc";
 import { CaptionOverlay, type CaptionLine } from "./CaptionOverlay";
 import { VideoStage } from "./VideoStage";
+import { FonglishLogo } from "./FonglishLogo";
 
 function servicePillClass(
   kind: "ok" | "loading" | "bad",
@@ -81,10 +85,18 @@ export function CallRoom({
   const micLoopStop = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const shareUrl = useMemo(
-    () => buildShareUrl(roomId, lanHost || null),
-    [roomId, lanHost],
-  );
+  const activeGateway = useMemo(() => resolveGatewayUrl(), []);
+  const oneClick = canOneClickInvite(activeGateway);
+  const shareUrl = useMemo(() => {
+    if (oneClick) {
+      return buildOneClickInvite(roomId, {
+        gatewayUrl: activeGateway,
+        speak: speakLang,
+        caption: captionLang,
+      });
+    }
+    return buildShareUrl(roomId, lanHost || null);
+  }, [roomId, lanHost, oneClick, activeGateway, speakLang, captionLang]);
   const shareIsLoopback = isShareUrlLoopback(shareUrl);
   const pageIsLoopback =
     typeof window !== "undefined" && isLoopbackHost(window.location.hostname);
@@ -306,7 +318,14 @@ export function CallRoom({
 
   const copyLink = async () => {
     if (lanHost) saveShareHost(lanHost);
-    await copyText(buildShareUrl(roomId, lanHost || null));
+    const url = oneClick
+      ? buildOneClickInvite(roomId, {
+          gatewayUrl: resolveGatewayUrl(),
+          speak: speakLang,
+          caption: captionLang,
+        })
+      : buildShareUrl(roomId, lanHost || null);
+    await copyText(url);
   };
 
   const copyGatewayUrl = async () => {
@@ -325,7 +344,7 @@ export function CallRoom({
       ? "Connection issue"
       : statusKind === "connected"
         ? "Connected"
-        : "Awaiting participant";
+        : "Waiting for guest";
 
   const ollamaK = ollamaKind(services);
   const sttK = sttKind(services);
@@ -351,12 +370,12 @@ export function CallRoom({
     <div className="room">
       {copyToast && (
         <div className="toast" role="status">
-          Copied
+          Copied to clipboard
         </div>
       )}
       <header className="room-header">
         <div className="room-header-main">
-          <div className="room-brand">Fonglish</div>
+          <FonglishLogo variant="compact" />
           <div className="room-meta muted">
             <div className="room-meta-row">
               <code className="room-id" title={roomId}>
@@ -411,29 +430,47 @@ export function CallRoom({
         </div>
       </header>
 
-      {(showLanPanel || lanHint) && (
-        <div className="banner info room-lan-banner" role="note">
-          <strong className="room-lan-title">Mac → Windows join</strong>
+      {oneClick && (
+        <div className="banner info room-lan-banner" role="status">
+          <strong className="room-lan-title">One-click Windows ready</strong>
           <p className="room-lan-lead">
-            Both machines must use your Mac&apos;s <strong>LAN IP</strong>, not{" "}
-            <code>127.0.0.1</code>. On the Mac run <code>npm run gateway</code>{" "}
-            and <code>npm run web</code>. Allow firewall ports{" "}
-            <strong>3000</strong> and <strong>8787</strong>.
+            Public <code>wss://</code> tunnel detected. Share the access link —
+            guests open one HTTPS URL on Vercel (no Node, no Chrome flags). Keep
+            this Mac online with <code>npm run gateway</code> +{" "}
+            <code>npm run host:public</code>.
+          </p>
+          <div className="room-lan-rows">
+            <div className="room-lan-row">
+              <span className="room-lan-label">Guest link</span>
+              <code className="room-lan-value">{shareUrl}</code>
+              <button
+                type="button"
+                className="btn btn-secondary btn-compact"
+                onClick={copyLink}
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!oneClick && (showLanPanel || lanHint) && (
+        <div className="banner info room-lan-banner" role="note">
+          <strong className="room-lan-title">Inviting someone on another computer</strong>
+          <p className="room-lan-lead">
+            <strong>One-click (no guest setup):</strong> run{" "}
+            <code>npm run host:public</code> on this Mac, set Caption gateway to
+            the printed <code>wss://…trycloudflare.com</code>, then Share access
+            link.
           </p>
           <p className="room-lan-lead">
-            <strong>Camera error on Windows?</strong> Browsers block cam/mic on{" "}
-            <code>http://192.168…</code> (not a secure origin). In{" "}
-            <strong>Chrome or Edge</strong> open{" "}
-            <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>{" "}
-            (Edge: <code>edge://flags/…</code>), add{" "}
-            <code>
-              http://{lanHost || "YOUR_MAC_IP"}:3000
-            </code>
-            , set to <strong>Enabled</strong>, relaunch the browser, then reload
-            the session link.
+            <strong>Same Wi‑Fi fallback:</strong> use LAN IP (not{" "}
+            <code>127.0.0.1</code>). Cam/mic on <code>http://192.168…</code> needs
+            a Chrome insecure-origin flag.
           </p>
           <div className="field room-lan-field">
-            <label htmlFor="lan-host">Mac LAN IP</label>
+            <label htmlFor="lan-host">Your network address</label>
             <input
               id="lan-host"
               placeholder="192.168.1.67"
@@ -456,7 +493,7 @@ export function CallRoom({
                   type="button"
                   className="btn btn-secondary btn-compact"
                   onClick={copyLink}
-                  aria-label="Copy session link for Windows"
+                  aria-label="Copy session link"
                 >
                   Copy
                 </button>
@@ -470,7 +507,7 @@ export function CallRoom({
                   type="button"
                   className="btn btn-secondary btn-compact"
                   onClick={copyGatewayUrl}
-                  aria-label="Copy caption gateway URL for Windows"
+                  aria-label="Copy caption gateway URL"
                 >
                   Copy
                 </button>
@@ -478,8 +515,8 @@ export function CallRoom({
             </div>
           )}
           <p id="lan-join-hint" className="field-hint">
-            On Windows: open the session link, then set Caption gateway in the
-            lobby to the value above.
+            On the other computer: open the session link, then paste the caption
+            gateway address into the lobby.
           </p>
           {lanHint && <p className="field-hint">{lanHint}</p>}
         </div>
@@ -489,7 +526,7 @@ export function CallRoom({
         <div className="room-alerts">
           {showSttLoading && (
             <div className="banner info" role="status">
-              Initializing speech recognition. This may take a moment on first use.
+              Warming up speech recognition — the first load can take a moment.
             </div>
           )}
           {showOllamaBad && (
@@ -502,15 +539,15 @@ export function CallRoom({
                   : undefined
               }
             >
-              Translation is temporarily unavailable. Captions in the spoken
-              language will continue. Please contact IT if this persists.
+              Translation isn&apos;t available right now. You&apos;ll still see
+              captions in the spoken language.
             </div>
           )}
           {showSttBad && (
             <div className="banner warn" role="alert">
-              Speech recognition could not be started
-              {services?.sttError ? `: ${services.sttError}` : ""}. Please
-              contact IT support.
+              Speech recognition couldn&apos;t start
+              {services?.sttError ? `: ${services.sttError}` : ""}. Check that
+              the gateway is running.
             </div>
           )}
           {error && (
@@ -608,8 +645,8 @@ export function CallRoom({
       </div>
 
       <p className="room-footer consent-note">
-        This session is not recorded. Captions are processed locally and are not
-        retained after the call ends.
+        This session is not recorded. Captions are processed locally and fade
+        when the call ends.
       </p>
     </div>
   );
