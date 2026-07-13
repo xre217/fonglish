@@ -25,7 +25,7 @@ Pull a chat model once:
 ollama pull llama3.2:3b
 ```
 
-## Quick start
+## Quick start (local)
 
 Works the same on **Windows (PowerShell/cmd)**, macOS, and Linux:
 
@@ -36,14 +36,43 @@ npm run env:init
 
 npm install
 
-# terminal 1
+# terminal 1 — caption brain (Whisper + Ollama)
 npm run gateway
 
-# terminal 2
+# terminal 2 — UI (or use the Vercel deploy and skip this)
 npm run web
 ```
 
-Open **http://127.0.0.1:3000** in two browser profiles (or two machines).
+Open **http://127.0.0.1:3000** (or your Vercel URL) in two browser profiles.
+
+## Deploy UI on Vercel
+
+The **web app** deploys to Vercel. The **gateway does not** (long-lived WebSocket + local Whisper/Ollama).
+
+```bash
+# from repo root (requires vercel CLI login)
+npx vercel link --yes
+npx vercel --prod
+```
+
+| Piece | Where it runs |
+|-------|----------------|
+| Lobby + call UI | **Vercel** (Next.js) |
+| WebSocket signaling + STT + MT | **Your machine** (`npm run gateway`) |
+
+On the lobby page, set **Caption gateway** to `ws://127.0.0.1:8787` (default). Start the gateway before joining a room.
+
+```bash
+npm run gateway   # keep running on the machine that does STT/MT
+```
+
+Optional Vercel env:
+
+| Name | Example | Notes |
+|------|---------|--------|
+| `NEXT_PUBLIC_GATEWAY_URL` | `ws://127.0.0.1:8787` | Default WS URL baked into the build |
+
+Monorepo build uses `npm run vercel-build` (shared + audio + web only — not the gateway).
 
 1. Create a room → **Copy invite**
 2. Open the link on the other side (name + languages on the lobby)

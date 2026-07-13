@@ -9,28 +9,23 @@ type Props = {
   remoteName: string | null;
   muted: boolean;
   camOff: boolean;
+  waitingForPeer?: boolean;
 };
 
 function VideoTile({
   stream,
-  name,
-  role,
+  label,
   muted,
   mirror,
   placeholder,
   pip,
-  showMuted,
-  showCamOff,
 }: {
   stream: MediaStream | null;
-  name: string;
-  role: "you" | "peer";
+  label: string;
   muted?: boolean;
   mirror?: boolean;
   placeholder: string;
   pip?: boolean;
-  showMuted?: boolean;
-  showCamOff?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
 
@@ -41,15 +36,7 @@ function VideoTile({
   }, [stream]);
 
   return (
-    <div
-      className={[
-        "video-tile",
-        pip ? "pip" : "",
-        role === "you" ? "local" : "remote-tile",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
+    <div className={`video-tile${pip ? " pip" : ""}`}>
       <video
         ref={ref}
         autoPlay
@@ -58,18 +45,7 @@ function VideoTile({
         className={mirror ? "mirror" : undefined}
       />
       {!stream && <div className="placeholder">{placeholder}</div>}
-      <div className="video-label">
-        <span className={`video-role${role === "you" ? " you" : ""}`}>
-          {role === "you" ? "You" : "Peer"}
-        </span>
-        <span className="video-name">{name}</span>
-        {(showMuted || showCamOff) && (
-          <span className="video-badges">
-            {showMuted && <span className="video-badge off">Mic off</span>}
-            {showCamOff && <span className="video-badge off">Cam off</span>}
-          </span>
-        )}
-      </div>
+      <div className="video-label">{label}</div>
     </div>
   );
 }
@@ -81,25 +57,34 @@ export function VideoStage({
   remoteName,
   muted,
   camOff,
+  waitingForPeer = false,
 }: Props) {
+  const localLabel = [
+    localName,
+    muted ? "audio muted" : null,
+    camOff ? "video off" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <div className="video-stage">
       <VideoTile
         stream={remoteStream}
-        name={remoteName ?? "Waiting…"}
-        role="peer"
-        placeholder="Share the invite link to start the call"
+        label={remoteName ?? "Participant"}
+        placeholder={
+          waitingForPeer
+            ? "Awaiting participant"
+            : "Establishing connection"
+        }
       />
       <VideoTile
         stream={camOff ? null : localStream}
-        name={localName}
-        role="you"
+        label={localLabel}
         muted
         mirror
         pip
-        showMuted={muted}
-        showCamOff={camOff}
-        placeholder="Camera is off"
+        placeholder="Video disabled"
       />
     </div>
   );

@@ -49,20 +49,22 @@ export default function LobbyPage() {
   return (
     <main className="container lobby">
       <div className="lobby-inner">
-        <p className="lobby-eyebrow">Fonglish</p>
-        <h1 className="lobby-title">Live bilingual subtitles</h1>
-        <p className="lobby-lead muted">
-          1:1 video calls with real-time captions — each person reads subtitles
-          in their own language.
-        </p>
+        <header className="lobby-header">
+          <p className="lobby-mark">Fonglish</p>
+          <h1 className="lobby-title">Secure bilingual consultation</h1>
+          <p className="lobby-lead">
+            Private video with live translated captions. Each participant selects
+            their own spoken and caption language.
+          </p>
+        </header>
 
         <div className="card lobby-card">
           <div className="lobby-form">
             <div className="field">
-              <label htmlFor="name">Your name</label>
+              <label htmlFor="name">Display name</label>
               <input
                 id="name"
-                placeholder="Alex"
+                placeholder="e.g. J. Mitchell"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 maxLength={40}
@@ -71,7 +73,7 @@ export default function LobbyPage() {
 
             <div className="lobby-langs">
               <div className="field">
-                <label htmlFor="speak">I speak</label>
+                <label htmlFor="speak">Spoken language</label>
                 <select
                   id="speak"
                   value={speakLang}
@@ -79,13 +81,13 @@ export default function LobbyPage() {
                 >
                   {LANGUAGES.map((l) => (
                     <option key={l.code} value={l.code}>
-                      {l.label} ({l.nativeLabel})
+                      {l.label}
                     </option>
                   ))}
                 </select>
               </div>
               <div className="field">
-                <label htmlFor="caption">Captions in</label>
+                <label htmlFor="caption">Caption language</label>
                 <select
                   id="caption"
                   value={captionLang}
@@ -93,7 +95,7 @@ export default function LobbyPage() {
                 >
                   {LANGUAGES.map((l) => (
                     <option key={l.code} value={l.code}>
-                      {l.label} ({l.nativeLabel})
+                      {l.label}
                     </option>
                   ))}
                 </select>
@@ -102,18 +104,18 @@ export default function LobbyPage() {
 
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-primary btn-block"
               disabled={!canStart}
               onClick={() => goRoom(randomId("room"))}
             >
-              Create room
+              Start session
             </button>
 
-            <div className="lobby-divider">or join existing</div>
+            <div className="lobby-divider">or join an existing session</div>
 
             <div className="lobby-join">
               <div className="field">
-                <label htmlFor="join">Room ID</label>
+                <label htmlFor="join">Session ID</label>
                 <input
                   id="join"
                   placeholder="room-ab12cd34"
@@ -128,7 +130,7 @@ export default function LobbyPage() {
               </div>
               <button
                 type="button"
-                className="btn btn-ghost"
+                className="btn btn-secondary"
                 disabled={!canStart || !joinId}
                 onClick={() => goRoom(joinId.replace(/^\/room\//, ""))}
               >
@@ -138,10 +140,9 @@ export default function LobbyPage() {
           </div>
         </div>
 
-        <p className="lobby-note">
-          Local gateway — Whisper STT + Ollama MT. Run{" "}
-          <code>npm run gateway</code> and <code>npm run web</code>, then open
-          two browser windows.
+        <p className="lobby-footer">
+          Captions are processed on your firm&apos;s local infrastructure. No
+          recording or retention by this application.
         </p>
       </div>
     </main>

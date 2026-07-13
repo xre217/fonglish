@@ -238,7 +238,10 @@ export function CallRoom({
   }, [roomId, peerId, displayName]);
 
   useEffect(() => {
-    clientRef.current?.updateLangs(speakLang, captionLang);
+    if (!clientRef.current?.ready) return;
+    clientRef.current.updateLangs(speakLang, captionLang);
+    setCaptions([]);
+    setError(null);
   }, [speakLang, captionLang]);
 
   const toggleMute = () => {
@@ -272,34 +275,35 @@ export function CallRoom({
 
   const statusLabel =
     statusKind === "error"
-      ? "Error"
+      ? "Connection issue"
       : statusKind === "connected"
         ? "Connected"
-        : "Waiting";
+        : "Awaiting participant";
 
   const ollamaK = ollamaKind(services);
   const sttK = sttKind(services);
   const ollamaTitle = services?.ollama
-    ? `Ollama ready (${services.ollamaModel ?? "model"})`
-    : `Ollama offline${services?.ollamaError ? `: ${services.ollamaError}` : " — start ollama and pull model"}`;
+    ? `Translation ready (${services.ollamaModel ?? "model"})`
+    : `Translation unavailable${services?.ollamaError ? `: ${services.ollamaError}` : ""}`;
   const sttTitle =
     services?.stt === "ready"
-      ? `STT ready (${services.sttModel ?? "whisper"})`
+      ? `Speech recognition ready (${services.sttModel ?? "whisper"})`
       : services?.stt === "loading" || !services
-        ? "Loading Whisper STT…"
-        : `STT error${services?.sttError ? `: ${services.sttError}` : ""}`;
+        ? "Initializing speech recognition…"
+        : `Speech recognition error${services?.sttError ? `: ${services.sttError}` : ""}`;
 
   const showSttLoading =
     services != null && services.stt === "loading";
   const showOllamaBad = services != null && !services.ollama;
   const showSttBad = services != null && (services.stt === "error" || services.stt === "unavailable");
   const hasAlerts = showSttLoading || showOllamaBad || showSttBad || !!error;
+  const waitingForPeer = !remotePeer;
 
   return (
     <div className="room">
       {copyToast && (
         <div className="toast" role="status">
-          Invite link copied
+          Access link copied
         </div>
       )}
       <header className="room-header">
@@ -313,7 +317,7 @@ export function CallRoom({
               <span
                 className={`status-pill ${statusKind}`}
                 title={status}
-                aria-label={`Call status: ${status}`}
+                aria-label={`Session status: ${statusLabel}`}
               >
                 <span className="status-dot" aria-hidden />
                 <span className="status-label">{statusLabel}</span>
@@ -325,59 +329,65 @@ export function CallRoom({
                 title={sttTitle}
                 aria-label={sttTitle}
               >
-                STT
+                Speech
               </span>
               <span
                 className={servicePillClass(ollamaK)}
                 title={ollamaTitle}
                 aria-label={ollamaTitle}
               >
-                MT
+                Translate
               </span>
               <span
                 className="room-stat"
-                title={mtMs != null ? `Translation latency ${mtMs}ms` : "Translation latency"}
-                aria-label={mtMs != null ? `${mtMs} ms` : "No latency yet"}
+                title={mtMs != null ? `Caption delay ${mtMs} ms` : "Caption delay"}
+                aria-label={mtMs != null ? `${mtMs} ms` : "No delay recorded"}
               >
-                {mtMs != null ? `${mtMs}ms` : "—"}
+                {mtMs != null ? `${mtMs} ms` : "—"}
               </span>
             </div>
           </div>
         </div>
         <div className="room-actions">
-          <button type="button" className="btn btn-ghost" onClick={copyLink}>
-            Copy invite
+          <button
+            type="button"
+            className={waitingForPeer ? "btn btn-primary" : "btn btn-secondary"}
+            onClick={copyLink}
+          >
+            Share access link
           </button>
           <a className="btn btn-ghost" href="/">
-            Leave
+            End session
           </a>
         </div>
       </header>
-
-      <p className="consent-note">
-        Captions run locally (Whisper + Ollama). Nothing is saved.
-      </p>
 
       {hasAlerts && (
         <div className="room-alerts">
           {showSttLoading && (
             <div className="banner info" role="status">
-              Loading local Whisper STT… first run may download the model.
+              Initializing speech recognition. This may take a moment on first use.
             </div>
           )}
           {showOllamaBad && (
-            <div className="banner warn" role="status">
-              Ollama not ready
-              {services?.ollamaModel ? ` (need ${services.ollamaModel})` : ""}.
-              Start it and run{" "}
-              <code>ollama pull {services?.ollamaModel ?? "llama3.2:3b"}</code>.
-              Same-language captions still work; translation will fail until fixed.
+            <div
+              className="banner warn"
+              role="status"
+              title={
+                services?.ollamaModel
+                  ? `IT: ollama pull ${services.ollamaModel}`
+                  : undefined
+              }
+            >
+              Translation is temporarily unavailable. Captions in the spoken
+              language will continue. Please contact IT if this persists.
             </div>
           )}
           {showSttBad && (
             <div className="banner warn" role="alert">
-              Local STT failed to load
-              {services?.sttError ? `: ${services.sttError}` : ""}.
+              Speech recognition could not be started
+              {services?.sttError ? `: ${services.sttError}` : ""}. Please
+              contact IT support.
             </div>
           )}
           {error && (
@@ -396,6 +406,7 @@ export function CallRoom({
           remoteName={remotePeer?.displayName ?? null}
           muted={muted}
           camOff={camOff}
+          waitingForPeer={waitingForPeer}
         />
 
         <div className="caption-dock">
@@ -415,9 +426,7 @@ export function CallRoom({
             className={`btn btn-ghost btn-media${muted ? " off" : ""}`}
             onClick={toggleMute}
             aria-pressed={muted}
-            aria-label={muted ? "Unmute microphone" : "Mute microphone"}
           >
-            <span className="media-glyph mic" aria-hidden />
             {muted ? "Unmute" : "Mute"}
           </button>
           <button
@@ -425,9 +434,7 @@ export function CallRoom({
             className={`btn btn-ghost btn-media${camOff ? " off" : ""}`}
             onClick={toggleCam}
             aria-pressed={camOff}
-            aria-label={camOff ? "Turn camera on" : "Turn camera off"}
           >
-            <span className="media-glyph cam" aria-hidden />
             {camOff ? "Camera on" : "Camera off"}
           </button>
           <label className="check-label">
@@ -436,12 +443,12 @@ export function CallRoom({
               checked={showOriginal}
               onChange={(e) => setShowOriginal(e.target.checked)}
             />
-            Original
+            Show source language
           </label>
         </div>
         <div className="toolbar-langs">
           <div className="field">
-            <label htmlFor="speak">I speak</label>
+            <label htmlFor="speak">Spoken language</label>
             <select
               id="speak"
               value={speakLang}
@@ -455,7 +462,7 @@ export function CallRoom({
             </select>
           </div>
           <div className="field">
-            <label htmlFor="caption">Captions in</label>
+            <label htmlFor="caption">Caption language</label>
             <select
               id="caption"
               value={captionLang}
@@ -470,6 +477,11 @@ export function CallRoom({
           </div>
         </div>
       </div>
+
+      <p className="room-footer consent-note">
+        This session is not recorded. Captions are processed locally and are not
+        retained after the call ends.
+      </p>
     </div>
   );
 }

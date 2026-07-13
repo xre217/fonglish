@@ -13,6 +13,7 @@
     "gateway": "npm run prepare && npm run dev -w @fonglish/gateway",
     "web": "npm run prepare && npm run dev -w @fonglish/web",
     "build": "npm run build -w @fonglish/shared && npm run build -w @fonglish/audio && npm run build -w @fonglish/gateway && npm run build -w @fonglish/web",
+    "vercel-build": "npm run build -w @fonglish/shared && npm run build -w @fonglish/audio && npm run build -w @fonglish/web",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "engines": {

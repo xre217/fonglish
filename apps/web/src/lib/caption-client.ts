@@ -7,6 +7,7 @@ import type {
   ServerMessage,
   SignalPayload,
 } from "@fonglish/shared";
+import { resolveGatewayUrl } from "./gateway-url";
 
 export type CaptionClientHandlers = {
   onWelcome?: (
@@ -27,34 +28,13 @@ export type CaptionClientHandlers = {
   onClose?: () => void;
 };
 
-/**
- * Resolve gateway WebSocket URL.
- * Prefer 127.0.0.1 over "localhost" so Windows does not hit IPv6 ::1 when
- * the Node gateway is bound on IPv4 only.
- */
-function gatewayUrl(): string {
-  if (process.env.NEXT_PUBLIC_GATEWAY_URL) {
-    return process.env.NEXT_PUBLIC_GATEWAY_URL;
-  }
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    const h =
-      host === "localhost" || host === "[::1]" || host === "::1"
-        ? "127.0.0.1"
-        : host;
-    const port = process.env.NEXT_PUBLIC_GATEWAY_PORT ?? "8787";
-    return `ws://${h}:${port}`;
-  }
-  return "ws://127.0.0.1:8787";
-}
-
 export class CaptionClient {
   private ws: WebSocket | null = null;
   private handlers: CaptionClientHandlers = {};
 
   connect(handlers: CaptionClientHandlers): void {
     this.handlers = handlers;
-    const url = gatewayUrl();
+    const url = resolveGatewayUrl();
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
@@ -64,7 +44,7 @@ export class CaptionClient {
     ws.onerror = () => {
       this.handlers.onError?.(
         "ws_error",
-        "WebSocket error — is the gateway running on port 8787?",
+        `WebSocket error — is the gateway running? Tried ${url}`,
       );
     };
     ws.onmessage = (ev) => {

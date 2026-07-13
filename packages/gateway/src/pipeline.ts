@@ -19,6 +19,7 @@ export class SpeakerPipeline {
   private lastPartialMtAt = 0;
   private closed = false;
   private connecting: Promise<void> | null = null;
+  private captionGeneration = 0;
 
   constructor(
     private room: Room,
@@ -76,18 +77,31 @@ export class SpeakerPipeline {
     });
   }
 
-  updateLangs(speakLang: LangCode, _captionLang: LangCode): void {
-    if (speakLang !== this.peer.speakLang) {
-      void this.restartStt(speakLang);
-    }
+  updateLangs(speakLang: LangCode, captionLang: LangCode): void {
+    const speakChanged = speakLang !== this.peer.speakLang;
+    const captionChanged = captionLang !== this.peer.captionLang;
+    if (!speakChanged && !captionChanged) return;
+
     this.peer.speakLang = speakLang;
+    this.peer.captionLang = captionLang;
+
+    if (speakChanged && this.stt) {
+      this.stt.setLanguage(speakLang);
+      console.log(
+        `[stt] language → ${speakLang} for ${this.peer.displayName}`,
+      );
+    }
+
+    this.resetCaptionState();
   }
 
-  private async restartStt(speakLang: LangCode): Promise<void> {
-    await this.stt?.close();
-    this.stt = null;
-    this.peer.speakLang = speakLang;
-    await this.ensureStarted();
+  private resetCaptionState(): void {
+    if (this.partialMtTimer) clearTimeout(this.partialMtTimer);
+    this.partialMtTimer = null;
+    this.utteranceId = randomUUID();
+    this.lastPartialText = "";
+    this.lastPartialMtAt = 0;
+    this.captionGeneration++;
   }
 
   private async handleStt(
@@ -125,6 +139,7 @@ export class SpeakerPipeline {
     sourceText: string,
     isFinal: boolean,
   ): Promise<void> {
+    const generation = this.captionGeneration;
     const sourceLang = this.peer.speakLang;
     const speakerId = this.peer.peerId;
     const speakerName = this.peer.displayName;
@@ -170,6 +185,8 @@ export class SpeakerPipeline {
     );
 
     if (!isFinal) this.lastPartialMtAt = Date.now();
+
+    if (generation !== this.captionGeneration) return;
 
     if (mtTimings.length > 0) {
       const avg = Math.round(

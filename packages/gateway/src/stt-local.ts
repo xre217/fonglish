@@ -115,9 +115,14 @@ export class LocalSttSession {
   private pendingFinal = false;
 
   constructor(
-    private readonly language: LangCode,
+    private language: LangCode,
     private readonly handlers: SttHandlers,
   ) {}
+
+  /** Switch recognition language without tearing down the VAD buffer. */
+  setLanguage(lang: LangCode): void {
+    this.language = lang;
+  }
 
   async connect(): Promise<void> {
     if (this.closed) return;
