@@ -2,11 +2,37 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrowserMicSource } from "@fonglish/audio";
-import { LANGUAGES, type CaptionEvent, type LangCode, type PeerInfo } from "@fonglish/shared";
+import {
+  LANGUAGES,
+  type CaptionEvent,
+  type GatewayServices,
+  type LangCode,
+  type PeerInfo,
+} from "@fonglish/shared";
 import { CaptionClient } from "@/lib/caption-client";
 import { CallPeer, getMediaStream } from "@/lib/webrtc";
 import { CaptionOverlay, type CaptionLine } from "./CaptionOverlay";
 import { VideoStage } from "./VideoStage";
+
+function servicePillClass(
+  kind: "ok" | "loading" | "bad",
+): string {
+  if (kind === "ok") return "svc-pill ok";
+  if (kind === "loading") return "svc-pill loading";
+  return "svc-pill bad";
+}
+
+function ollamaKind(s: GatewayServices | null): "ok" | "loading" | "bad" {
+  if (!s) return "loading";
+  return s.ollama ? "ok" : "bad";
+}
+
+function sttKind(s: GatewayServices | null): "ok" | "loading" | "bad" {
+  if (!s) return "loading";
+  if (s.stt === "ready") return "ok";
+  if (s.stt === "loading") return "loading";
+  return "bad";
+}
 
 type Props = {
   roomId: string;
@@ -35,6 +61,8 @@ export function CallRoom({
   const [showOriginal, setShowOriginal] = useState(true);
   const [captions, setCaptions] = useState<CaptionLine[]>([]);
   const [mtMs, setMtMs] = useState<number | null>(null);
+  const [services, setServices] = useState<GatewayServices | null>(null);
+  const [copyToast, setCopyToast] = useState(false);
 
   const clientRef = useRef<CaptionClient | null>(null);
   const callRef = useRef<CallPeer | null>(null);
@@ -108,7 +136,8 @@ export function CallRoom({
             });
           },
           onClose: () => setStatus("Disconnected"),
-          onWelcome: (peers) => {
+          onWelcome: (peers, _peerId, _roomId, svc) => {
+            if (svc) setServices(svc);
             setStatus(peers.length ? "Connecting media…" : "Waiting for peer…");
             const other = peers[0] ?? null;
             setRemotePeer(other);
@@ -118,6 +147,7 @@ export function CallRoom({
               void call.createOffer();
             }
           },
+          onServices: (svc) => setServices(svc),
           onPeerJoined: (peer) => {
             setRemotePeer(peer);
             setStatus("Peer joined — connecting media…");
@@ -227,8 +257,8 @@ export function CallRoom({
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(shareUrl);
-      setStatus("Invite link copied");
-      setTimeout(() => setStatus(remotePeer ? "Connected" : "Waiting for peer…"), 2000);
+      setCopyToast(true);
+      window.setTimeout(() => setCopyToast(false), 2000);
     } catch {
       setError("Could not copy link");
     }
@@ -240,18 +270,68 @@ export function CallRoom({
       ? "connected"
       : "waiting";
 
+  const statusLabel =
+    statusKind === "error"
+      ? "Error"
+      : statusKind === "connected"
+        ? "Connected"
+        : "Waiting";
+
+  const ollamaK = ollamaKind(services);
+  const sttK = sttKind(services);
+  const ollamaTitle = services?.ollama
+    ? `Ollama ready (${services.ollamaModel ?? "model"})`
+    : `Ollama offline${services?.ollamaError ? `: ${services.ollamaError}` : " — start ollama and pull model"}`;
+  const sttTitle =
+    services?.stt === "ready"
+      ? `STT ready (${services.sttModel ?? "whisper"})`
+      : services?.stt === "loading" || !services
+        ? "Loading Whisper STT…"
+        : `STT error${services?.sttError ? `: ${services.sttError}` : ""}`;
+
+  const showSttLoading =
+    services != null && services.stt === "loading";
+  const showOllamaBad = services != null && !services.ollama;
+  const showSttBad = services != null && (services.stt === "error" || services.stt === "unavailable");
+  const hasAlerts = showSttLoading || showOllamaBad || showSttBad || !!error;
+
   return (
     <div className="room">
+      {copyToast && (
+        <div className="toast" role="status">
+          Invite link copied
+        </div>
+      )}
       <header className="room-header">
-        <div>
+        <div className="room-header-main">
           <div className="room-brand">Fonglish</div>
           <div className="room-meta muted">
             <code className="room-id">{roomId}</code>
-            <span className={`status-pill ${statusKind}`}>
-              <span className="status-dot" />
-              {status}
+            <span
+              className={`status-pill ${statusKind}`}
+              title={status}
+              aria-label={`Call status: ${status}`}
+            >
+              <span className="status-dot" aria-hidden />
+              <span className="status-label">{statusLabel}</span>
             </span>
-            {mtMs != null && <span>MT {mtMs}ms</span>}
+            <span
+              className={servicePillClass(sttK)}
+              title={sttTitle}
+              aria-label={sttTitle}
+            >
+              STT
+            </span>
+            <span
+              className={servicePillClass(ollamaK)}
+              title={ollamaTitle}
+              aria-label={ollamaTitle}
+            >
+              MT
+            </span>
+            <span className="room-stat" aria-hidden={mtMs == null}>
+              {mtMs != null ? `${mtMs}ms` : "—"}
+            </span>
           </div>
         </div>
         <div className="room-actions">
@@ -264,31 +344,59 @@ export function CallRoom({
         </div>
       </header>
 
-      <div className="banner">
-        This call is transcribed and translated in real time. Audio is sent to the
-        caption gateway for processing. Nothing is stored.
-      </div>
+      <p className="consent-note">
+        Live captions via your local gateway — not saved.
+      </p>
 
-      {error && (
-        <div className="banner warn" role="alert">
-          {error}
+      {hasAlerts && (
+        <div className="room-alerts">
+          {showSttLoading && (
+            <div className="banner info" role="status">
+              Loading local Whisper STT… first run may download the model.
+            </div>
+          )}
+          {showOllamaBad && (
+            <div className="banner warn" role="status">
+              Ollama not ready
+              {services?.ollamaModel ? ` (need ${services.ollamaModel})` : ""}.
+              Start it and run{" "}
+              <code>ollama pull {services?.ollamaModel ?? "llama3.2:3b"}</code>.
+              Same-language captions still work; translation will fail until fixed.
+            </div>
+          )}
+          {showSttBad && (
+            <div className="banner warn" role="alert">
+              Local STT failed to load
+              {services?.sttError ? `: ${services.sttError}` : ""}.
+            </div>
+          )}
+          {error && (
+            <div className="banner warn" role="alert">
+              {error}
+            </div>
+          )}
         </div>
       )}
 
-      <VideoStage
-        localStream={localStream}
-        remoteStream={remoteStream}
-        localName={displayName}
-        remoteName={remotePeer?.displayName ?? null}
-        muted={muted}
-        camOff={camOff}
-      />
+      <div className="call-stage">
+        <VideoStage
+          localStream={localStream}
+          remoteStream={remoteStream}
+          localName={displayName}
+          remoteName={remotePeer?.displayName ?? null}
+          muted={muted}
+          camOff={camOff}
+        />
 
-      <CaptionOverlay
-        lines={captions}
-        showOriginal={showOriginal}
-        selfPeerId={peerId}
-      />
+        <div className="caption-dock">
+          <CaptionOverlay
+            lines={captions}
+            showOriginal={showOriginal}
+            selfPeerId={peerId}
+            docked
+          />
+        </div>
+      </div>
 
       <div className="toolbar card">
         <div className="toolbar-controls">
@@ -299,7 +407,10 @@ export function CallRoom({
             title={muted ? "Unmute" : "Mute"}
             aria-label={muted ? "Unmute microphone" : "Mute microphone"}
           >
-            {muted ? "🔇" : "🎤"}
+            <span className="btn-icon-glyph" aria-hidden>
+              {muted ? "🔇" : "🎤"}
+            </span>
+            <span className="btn-icon-text">{muted ? "Unmute" : "Mute"}</span>
           </button>
           <button
             type="button"
@@ -308,7 +419,10 @@ export function CallRoom({
             title={camOff ? "Turn camera on" : "Turn camera off"}
             aria-label={camOff ? "Turn camera on" : "Turn camera off"}
           >
-            {camOff ? "📷" : "🎥"}
+            <span className="btn-icon-glyph" aria-hidden>
+              {camOff ? "📷" : "🎥"}
+            </span>
+            <span className="btn-icon-text">{camOff ? "Cam on" : "Cam off"}</span>
           </button>
           <label className="check-label">
             <input
@@ -316,7 +430,7 @@ export function CallRoom({
               checked={showOriginal}
               onChange={(e) => setShowOriginal(e.target.checked)}
             />
-            Show original
+            Original
           </label>
         </div>
         <div className="toolbar-langs">

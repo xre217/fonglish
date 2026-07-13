@@ -119,6 +119,11 @@ export default function LobbyPage() {
                   placeholder="room-ab12cd34"
                   value={joinId}
                   onChange={(e) => setJoinId(e.target.value.trim())}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && canStart && joinId) {
+                      goRoom(joinId.replace(/^\/room\//, ""));
+                    }
+                  }}
                 />
               </div>
               <button
@@ -134,8 +139,8 @@ export default function LobbyPage() {
         </div>
 
         <p className="lobby-hint muted">
-          Open in two browser windows to try a call. Run{" "}
-          <code>npm run gateway</code> and <code>npm run web</code> first.
+          Requires <code>npm run gateway</code>, <code>npm run web</code>, and a
+          running Ollama instance. Open in two browser windows to try a call.
         </p>
       </div>
     </main>

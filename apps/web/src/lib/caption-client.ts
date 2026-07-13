@@ -1,6 +1,7 @@
 import type {
   CaptionEvent,
   ClientMessage,
+  GatewayServices,
   LangCode,
   PeerInfo,
   ServerMessage,
@@ -8,7 +9,12 @@ import type {
 } from "@fonglish/shared";
 
 export type CaptionClientHandlers = {
-  onWelcome?: (peers: PeerInfo[], peerId: string, roomId: string) => void;
+  onWelcome?: (
+    peers: PeerInfo[],
+    peerId: string,
+    roomId: string,
+    services?: GatewayServices,
+  ) => void;
   onPeerJoined?: (peer: PeerInfo) => void;
   onPeerLeft?: (peerId: string) => void;
   onPeerUpdated?: (peer: PeerInfo) => void;
@@ -16,6 +22,7 @@ export type CaptionClientHandlers = {
   onCaption?: (caption: CaptionEvent) => void;
   onError?: (code: string, message: string) => void;
   onStats?: (stats: { sttMs?: number; mtMs?: number }) => void;
+  onServices?: (services: GatewayServices) => void;
   onOpen?: () => void;
   onClose?: () => void;
 };
@@ -58,7 +65,13 @@ export class CaptionClient {
       }
       switch (msg.type) {
         case "welcome":
-          this.handlers.onWelcome?.(msg.peers, msg.peerId, msg.roomId);
+          this.handlers.onWelcome?.(
+            msg.peers,
+            msg.peerId,
+            msg.roomId,
+            msg.services,
+          );
+          if (msg.services) this.handlers.onServices?.(msg.services);
           break;
         case "peer_joined":
           this.handlers.onPeerJoined?.(msg.peer);
@@ -80,6 +93,9 @@ export class CaptionClient {
           break;
         case "stats":
           this.handlers.onStats?.({ sttMs: msg.sttMs, mtMs: msg.mtMs });
+          break;
+        case "services":
+          this.handlers.onServices?.(msg.services);
           break;
       }
     };

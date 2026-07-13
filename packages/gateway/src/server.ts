@@ -6,7 +6,9 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   isLangCode,
   type ClientMessage,
+  type GatewayServices,
   type LangCode,
+  type ServiceState,
 } from "@fonglish/shared";
 import {
   broadcast,
@@ -19,6 +21,7 @@ import {
 } from "./rooms.js";
 import { SpeakerPipeline } from "./pipeline.js";
 import { checkOllama } from "./mt-ollama.js";
+import { getSttLoadState, preloadAsr } from "./stt-local.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load monorepo root .env
@@ -34,18 +37,72 @@ type SocketState = {
   pipeline: SpeakerPipeline | null;
 };
 
+type OllamaSnapshot = {
+  ok: boolean;
+  base: string;
+  model: string;
+  error?: string;
+};
+
+let ollamaSnap: OllamaSnapshot = {
+  ok: false,
+  base: process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434",
+  model: process.env.OLLAMA_MT_MODEL ?? "llama3.2:3b",
+  error: "not checked yet",
+};
+
+function sttServiceState(): ServiceState {
+  const s = getSttLoadState().status;
+  if (s === "ready") return "ready";
+  if (s === "loading" || s === "idle") return "loading";
+  if (s === "error") return "error";
+  return "unavailable";
+}
+
+function currentServices(): GatewayServices {
+  const stt = getSttLoadState();
+  return {
+    ollama: ollamaSnap.ok,
+    ollamaModel: ollamaSnap.model,
+    ollamaError: ollamaSnap.error,
+    stt: sttServiceState(),
+    sttModel: stt.model,
+    sttError: stt.error,
+  };
+}
+
+function broadcastServices(wss: WebSocketServer): void {
+  const msg = { type: "services" as const, services: currentServices() };
+  const raw = JSON.stringify(msg);
+  for (const client of wss.clients) {
+    if (client.readyState === 1 /* OPEN */) {
+      try {
+        client.send(raw);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 const server = http.createServer((req, res) => {
   if (req.url === "/health") {
     void (async () => {
-      const ollama = await checkOllama();
+      // Refresh Ollama on health probes so UI can re-check without restart
+      ollamaSnap = await checkOllama();
+      const stt = getSttLoadState();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
           ok: true,
-          ollama: ollama.ok,
-          ollamaBase: ollama.base,
-          ollamaModel: ollama.model,
-          ollamaError: ollama.error,
+          ollama: ollamaSnap.ok,
+          ollamaBase: ollamaSnap.base,
+          ollamaModel: ollamaSnap.model,
+          ollamaError: ollamaSnap.error,
+          stt: sttServiceState(),
+          sttModel: stt.model,
+          sttError: stt.error,
+          services: currentServices(),
         }),
       );
     })();
@@ -63,6 +120,9 @@ wss.on("connection", (ws) => {
     roomId: null,
     pipeline: null,
   };
+
+  // Push current readiness immediately so UI can show pills before join
+  send(ws, { type: "services", services: currentServices() });
 
   ws.on("message", (raw, isBinary) => {
     if (isBinary) {
@@ -117,7 +177,6 @@ async function handleJson(
         return;
       }
 
-      // Leave previous room if any
       await cleanup(state);
 
       const room = getOrCreateRoom(msg.roomId);
@@ -152,6 +211,7 @@ async function handleJson(
         peerId: peer.peerId,
         roomId: room.roomId,
         peers: others,
+        services: currentServices(),
       });
 
       broadcast(
@@ -211,7 +271,6 @@ async function handleJson(
 
     case "audio.meta":
     case "audio.end":
-      // Optional metadata; binary frames carry PCM
       return;
 
     default:
@@ -233,7 +292,6 @@ async function cleanup(state: SocketState): Promise<void> {
     const peerId = state.peerId;
     const left = removePeer(roomId, peerId);
     if (left) {
-      // removePeer deletes empty rooms; only notify remaining peers
       const room = getRoom(roomId);
       if (room && room.peers.size > 0) {
         broadcast(room, { type: "peer_left", peerId });
@@ -247,15 +305,43 @@ async function cleanup(state: SocketState): Promise<void> {
 
 server.listen(PORT, HOST, () => {
   console.log(`fonglish gateway on ws://${HOST}:${PORT}`);
-  void checkOllama().then((o) => {
-    if (o.ok) {
-      console.log(`Ollama: ok (${o.base}, model ${o.model})`);
+
+  void (async () => {
+    ollamaSnap = await checkOllama();
+    if (ollamaSnap.ok) {
+      console.log(`Ollama: ok (${ollamaSnap.base}, model ${ollamaSnap.model})`);
     } else {
       console.warn(
-        `Ollama: NOT READY (${o.base}, model ${o.model}) — ${o.error ?? "unknown"}`,
+        `Ollama: NOT READY (${ollamaSnap.base}, model ${ollamaSnap.model}) — ${ollamaSnap.error ?? "unknown"}`,
       );
-      console.warn("Start Ollama and pull the model, e.g. `ollama pull llama3.2:3b`");
+      console.warn(
+        "Start Ollama and pull the model, e.g. `ollama pull llama3.2:3b`",
+      );
     }
+    broadcastServices(wss);
+
+    // Refresh Ollama periodically so clients see recovery without restart
+    setInterval(() => {
+      void checkOllama().then((o) => {
+        const changed =
+          o.ok !== ollamaSnap.ok ||
+          o.model !== ollamaSnap.model ||
+          o.error !== ollamaSnap.error;
+        ollamaSnap = o;
+        if (changed) broadcastServices(wss);
+      });
+    }, 15_000).unref?.();
+  })();
+
+  console.log("STT: preloading Whisper (Transformers.js)…");
+  void preloadAsr().then((state) => {
+    if (state.status === "ready") {
+      console.log(`STT: ready (${state.model})`);
+    } else {
+      console.warn(
+        `STT: ${state.status}${state.error ? ` — ${state.error}` : ""}`,
+      );
+    }
+    broadcastServices(wss);
   });
-  console.log("STT: local Whisper (Transformers.js) — first run downloads the model");
 });

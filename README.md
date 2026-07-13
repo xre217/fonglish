@@ -107,9 +107,10 @@ This MVP runs **STT and translation on your machine** (Whisper ONNX + Ollama). M
 | Symptom | Check |
 |---------|--------|
 | “WebSocket error” | Gateway running? `curl http://localhost:8787/health` |
-| No captions | Ollama running? `curl http://localhost:11434/api/tags` — model pulled? Gateway logs show `[stt] ready`? Mic unmuted? |
+| No captions | Ollama running? `curl http://localhost:11434/api/tags` — model pulled? Gateway logs `STT: ready`? In-call **STT**/**MT** pills green? Mic unmuted? |
 | MT errors | `OLLAMA_MT_MODEL` matches a pulled model? Try `ollama run llama3.2:3b` |
-| Slow first caption | Whisper model downloading; subsequent utterances are faster |
+| STT pill yellow | Whisper still loading/downloading — wait for gateway log `STT: ready` |
+| Slow first caption | Should be rare after preload; if cold start, wait for STT ready pill |
 | No remote video | Allow camera; try same Wi‑Fi; check browser console for ICE errors |
 | Room full | v1 is 1:1 — only two peers per room |
 

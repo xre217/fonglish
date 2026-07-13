@@ -27,15 +27,27 @@ const PARTIAL_INTERVAL_MS = Number(process.env.STT_PARTIAL_MS ?? 1600);
 const WHISPER_MODEL =
   process.env.WHISPER_MODEL ?? "Xenova/whisper-tiny";
 
+export type SttLoadState = {
+  status: "idle" | "loading" | "ready" | "error";
+  model: string;
+  error?: string;
+};
+
 type AsrPipeline = (
   audio: Float32Array,
   opts?: Record<string, unknown>,
 ) => Promise<{ text: string } | { text: string }[]>;
 
 let asrPromise: Promise<AsrPipeline> | null = null;
+let sttLoad: SttLoadState = { status: "idle", model: WHISPER_MODEL };
+
+export function getSttLoadState(): SttLoadState {
+  return sttLoad;
+}
 
 async function getAsr(): Promise<AsrPipeline> {
   if (!asrPromise) {
+    sttLoad = { status: "loading", model: WHISPER_MODEL };
     asrPromise = (async () => {
       // @xenova/transformers loads ONNX whisper in-process (local, free).
       const { pipeline, env } = await import("@xenova/transformers");
@@ -45,13 +57,26 @@ async function getAsr(): Promise<AsrPipeline> {
         "automatic-speech-recognition",
         WHISPER_MODEL,
       );
+      sttLoad = { status: "ready", model: WHISPER_MODEL };
       return pipe as unknown as AsrPipeline;
     })().catch((err) => {
       asrPromise = null;
+      const message = err instanceof Error ? err.message : String(err);
+      sttLoad = { status: "error", model: WHISPER_MODEL, error: message };
       throw err;
     });
   }
   return asrPromise;
+}
+
+/** Load Whisper at gateway boot so the first utterance is not a cold start. */
+export async function preloadAsr(): Promise<SttLoadState> {
+  try {
+    await getAsr();
+  } catch {
+    /* state already set in getAsr */
+  }
+  return sttLoad;
 }
 
 function pcm16ToFloat32(buf: Buffer): Float32Array {
@@ -192,9 +217,13 @@ export class LocalSttSession {
         sampling_rate: AUDIO.sampleRate,
       });
 
-      const text = Array.isArray(result)
+      const raw = Array.isArray(result)
         ? result.map((r) => r.text).join(" ").trim()
         : String(result.text ?? "").trim();
+      const text = raw
+        .replace(/\[BLANK_AUDIO\]/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
 
       if (text) {
         this.handlers.onPartial({

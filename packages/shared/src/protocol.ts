@@ -78,6 +78,7 @@ export type ServerMessage =
       peerId: string;
       roomId: string;
       peers: PeerInfo[];
+      services?: GatewayServices;
     }
   | {
       type: "peer_joined";
@@ -109,6 +110,10 @@ export type ServerMessage =
       type: "stats";
       sttMs?: number;
       mtMs?: number;
+    }
+  | {
+      type: "services";
+      services: GatewayServices;
     };
 
 export type PeerInfo = {
@@ -117,6 +122,18 @@ export type PeerInfo = {
   speakLang: LangCode;
   captionLang: LangCode;
   muted: boolean;
+};
+
+/** Local AI service readiness (Ollama MT + Whisper STT). */
+export type ServiceState = "ready" | "loading" | "error" | "unavailable";
+
+export type GatewayServices = {
+  ollama: boolean;
+  ollamaModel?: string;
+  ollamaError?: string;
+  stt: ServiceState;
+  sttModel?: string;
+  sttError?: string;
 };
 
 /** Audio constants for PCM capture (16 kHz mono — Whisper-friendly). */
