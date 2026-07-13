@@ -107,19 +107,15 @@ export default function LobbyPage() {
 
   return (
     <main className="container lobby">
-      <div className="lobby-inner">
+      <div className="lobby-inner lobby-animate">
         <header className="lobby-header">
           <FonglishLogo variant="lobby" />
-          <h1 className="lobby-title">Clear conversation, across languages</h1>
-          <p className="lobby-lead">
-            Live video with translated captions. One-click guests use Vercel + a
-            public tunnel; processing can stay on the host Mac.
-          </p>
+          <h1 className="lobby-title">Every word counts, across languages</h1>
         </header>
 
         <div className="card lobby-card">
           {hostedUi && (
-            <div className="banner info lobby-hosted-banner" role="note">
+            <div className="banner info lobby-hosted-banner banner-enter" role="note">
               <strong className="lobby-hosted-title">
                 {publicGw ? "One-click guest mode" : "Windows one-click (host Mac)"}
               </strong>
@@ -222,16 +218,21 @@ export default function LobbyPage() {
               <label htmlFor="gateway">Caption gateway</label>
               <input
                 id="gateway"
+                type="text"
+                inputMode="text"
                 placeholder="ws://127.0.0.1:8787 or wss://….trycloudflare.com"
                 value={gatewayUrl}
                 onChange={(e) => setGatewayUrl(e.target.value)}
                 spellCheck={false}
                 aria-describedby="gateway-hint"
                 autoComplete="off"
+                // Avoid browser URL/pattern validation (wss:// is not a valid type=url)
+                data-1p-ignore
               />
               <span id="gateway-hint" className="field-hint">
                 Local: <code>ws://127.0.0.1:8787</code>. One-click guests: paste{" "}
-                <code>wss://</code> from <code>npm run host:public</code>.
+                <code>wss://</code> from <code>npm run host:public</code>. Do not
+                paste <code>wss://</code> into Chrome flags — only into this box.
               </span>
             </div>
 
@@ -239,7 +240,7 @@ export default function LobbyPage() {
               type="button"
               className="btn btn-primary btn-block"
               disabled={!canStart}
-              onClick={() => goRoom(randomId("room"))}
+              onClick={() => void goRoom(randomId("room"))}
             >
               Start session
             </button>

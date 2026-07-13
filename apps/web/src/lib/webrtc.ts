@@ -208,33 +208,88 @@ export async function getMediaStream(opts?: {
     );
   }
 
-  try {
-    return await devices.getUserMedia({
+  const wantVideo = opts?.video !== false;
+  const wantAudio = opts?.audio !== false;
+
+  // Progressive constraints — Windows desktops often fail with facingMode: "user"
+  // ("Could not start video source") when no front-facing camera is labeled.
+  const attempts: MediaStreamConstraints[] = [];
+  if (wantVideo && wantAudio) {
+    attempts.push({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
       },
-      video:
-        opts?.video === false
-          ? false
-          : {
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              facingMode: "user",
-            },
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
     });
-  } catch (err) {
-    const name = err instanceof DOMException ? err.name : "";
-    const msg = err instanceof Error ? err.message : String(err);
-    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-      throw new Error(
-        "Camera/mic permission denied. Click the lock icon in the address bar and allow access, then reload.",
-      );
-    }
-    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-      throw new Error("No camera or microphone found on this device.");
-    }
-    throw new Error(msg || "Could not access camera/microphone.");
+    attempts.push({ audio: true, video: true });
+    attempts.push({
+      audio: true,
+      video: { width: { ideal: 640 }, height: { ideal: 480 } },
+    });
+  } else if (wantVideo) {
+    attempts.push({ video: true });
+  } else {
+    attempts.push({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    attempts.push({ audio: true });
   }
+
+  let lastErr: unknown;
+  for (const constraints of attempts) {
+    try {
+      return await devices.getUserMedia(constraints);
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+
+  // Last resort: audio only so the call can still connect
+  if (wantVideo && wantAudio) {
+    try {
+      const audioOnly = await devices.getUserMedia({ audio: true });
+      console.warn(
+        "[media] Camera failed; continuing with microphone only.",
+        lastErr,
+      );
+      return audioOnly;
+    } catch {
+      /* fall through */
+    }
+  }
+
+  const name = lastErr instanceof DOMException ? lastErr.name : "";
+  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    throw new Error(
+      "Camera/mic permission denied. Click the lock icon in the address bar → Site settings → Allow camera & microphone, then reload.",
+    );
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    throw new Error("No camera or microphone found on this device.");
+  }
+  if (
+    name === "NotReadableError" ||
+    name === "TrackStartError" ||
+    /could not start video source|could not start audio source/i.test(msg)
+  ) {
+    throw new Error(
+      "Could not start camera/mic — another app may be using it (Teams, Zoom, Skype). Close those, unplug/replug the camera, then reload. On Windows also check Settings → Privacy → Camera/Microphone.",
+    );
+  }
+  if (name === "OverconstrainedError" || name === "ConstraintNotSatisfiedError") {
+    throw new Error(
+      "Camera does not support the requested settings. Try another camera in system settings, then reload.",
+    );
+  }
+  throw new Error(msg || "Could not access camera/microphone.");
 }
