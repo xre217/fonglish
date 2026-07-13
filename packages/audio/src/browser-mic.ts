@@ -61,7 +61,18 @@ export class BrowserMicSource implements AudioSource {
       }
     }, 1500);
 
-    this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
+    // Prefer original stream first (clone can be silent on some Chrome builds).
+    // Fall back to owned clones only if original has no audio tracks (shouldn't happen).
+    const captureStream =
+      original.getAudioTracks().length > 0
+        ? original
+        : this.stream ?? original;
+    this.sourceNode = this.ctx.createMediaStreamSource(captureStream);
+
+    // Soft gain so quiet laptop mics clear the gateway VAD threshold.
+    const preGain = this.ctx.createGain();
+    preGain.gain.value = 2.5;
+
     // 4096 frames ≈ buffer; we re-chunk after resample
     this.processor = this.ctx.createScriptProcessor(4096, 1, 1);
     this.processor.onaudioprocess = (ev) => {
@@ -81,7 +92,8 @@ export class BrowserMicSource implements AudioSource {
       this.enqueuePcm(resampled);
     };
 
-    this.sourceNode.connect(this.processor);
+    this.sourceNode.connect(preGain);
+    preGain.connect(this.processor);
     // Keep processor alive without audible feedback
     const silent = this.ctx.createGain();
     silent.gain.value = 0;

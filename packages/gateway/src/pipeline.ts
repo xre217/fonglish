@@ -31,12 +31,17 @@ export class SpeakerPipeline {
   /** Hold PCM until STT session is ready so the first utterance is not dropped. */
   private pendingPcm: Buffer[] = [];
   private static readonly MAX_PENDING = 80; // ~8s at 100ms chunks
+  /**
+   * When true, client is feeding browser SpeechRecognition text — skip Whisper PCM
+   * so we don't emit duplicate captions for the same utterance.
+   */
+  private preferBrowserStt = false;
 
   constructor(
     private room: Room,
     private peer: RoomPeer,
   ) {
-    // Start STT immediately on join so the first speech isn't lost to connect race.
+    // Start Whisper STT immediately (used when browser speech is unavailable).
     void this.ensureStarted();
   }
 
@@ -96,6 +101,8 @@ export class SpeakerPipeline {
 
   pushPcm(pcm: Buffer): void {
     if (this.closed || this.peer.muted) return;
+    // Browser SpeechRecognition is preferred when active — ignore PCM to avoid double captions.
+    if (this.preferBrowserStt) return;
     if (this.stt) {
       this.stt.sendPcm(pcm);
       return;
@@ -106,6 +113,22 @@ export class SpeakerPipeline {
       this.pendingPcm.shift();
     }
     void this.ensureStarted();
+  }
+
+  /**
+   * Text from browser Web Speech API (or other client-side STT).
+   * Bypasses Whisper; still runs Ollama MT + caption broadcast.
+   */
+  pushText(text: string, isFinal: boolean): void {
+    if (this.closed || this.peer.muted) return;
+    const cleaned = text.replace(/\s+/g, " ").trim();
+    if (!cleaned) return;
+    this.preferBrowserStt = true;
+    this.pendingPcm = []; // drop buffered PCM — browser path won
+    console.log(
+      `[stt] browser-text ${isFinal ? "final" : "partial"} for ${this.peer.displayName}: ${cleaned.slice(0, 100)}`,
+    );
+    void this.handleStt(cleaned, isFinal, isFinal);
   }
 
   updateLangs(speakLang: LangCode, captionLang: LangCode): void {

@@ -120,7 +120,7 @@ export class CaptionClient {
   }
 
   /**
-   * Send PCM16 mono to the gateway for STT.
+   * Send PCM16 mono to the gateway for Whisper STT.
    * Uses base64 JSON by default — more reliable through Cloudflare/quick tunnels
    * than raw binary frames from some browsers. Binary still accepted by gateway.
    */
@@ -135,6 +135,19 @@ export class CaptionClient {
       data: arrayBufferToBase64(pcm),
       sampleRate: 16000,
       ts: Date.now(),
+    });
+  }
+
+  /** Send browser-transcribed text (Web Speech API) for MT + captions. */
+  sendSttText(text: string, isFinal: boolean, source = "browser"): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    const cleaned = text.replace(/\s+/g, " ").trim();
+    if (!cleaned) return;
+    this.send({
+      type: "stt.text",
+      text: cleaned,
+      isFinal,
+      source,
     });
   }
 

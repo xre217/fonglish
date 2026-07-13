@@ -11,6 +11,10 @@ import {
 } from "@fonglish/shared";
 import { CaptionClient } from "@/lib/caption-client";
 import {
+  BrowserSpeechSource,
+  browserSpeechSupported,
+} from "@/lib/browser-speech";
+import {
   buildLanGatewayUrl,
   buildOneClickInvite,
   buildShareUrl,
@@ -81,16 +85,21 @@ export function CallRoom({
   /** Mic level 0–1 for caption-path diagnostics (STT feed, not WebRTC). */
   const [micLevel, setMicLevel] = useState(0);
   const [pcmSent, setPcmSent] = useState(0);
+  const [captionEngine, setCaptionEngine] = useState<
+    "browser" | "whisper" | "starting"
+  >("starting");
 
   const clientRef = useRef<CaptionClient | null>(null);
   const callRef = useRef<CallPeer | null>(null);
   const micSourceRef = useRef<BrowserMicSource | null>(null);
+  const speechRef = useRef<BrowserSpeechSource | null>(null);
   const micLoopStop = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const joinedRef = useRef(false);
   const mutedRef = useRef(false);
   const pcmCountRef = useRef(0);
   const levelTickRef = useRef(0);
+  const useBrowserSttRef = useRef(false);
 
   const activeGateway = useMemo(() => resolveGatewayUrl(), []);
   const oneClick = canOneClickInvite(activeGateway);
@@ -265,31 +274,71 @@ export function CallRoom({
           },
         });
 
-        // Stream mic PCM to gateway for STT (own mic only). Independent of WebRTC A/V.
+        // Prefer Chrome/Edge Web Speech for captions (reliable). Whisper PCM is fallback.
+        const canBrowser = browserSpeechSupported();
+        useBrowserSttRef.current = canBrowser;
+        if (canBrowser) {
+          const speech = new BrowserSpeechSource(initialSpeak, {
+            onText: (text, isFinal) => {
+              if (!joinedRef.current || !client.ready || mutedRef.current) return;
+              client.sendSttText(text, isFinal, "browser");
+              pcmCountRef.current += 1;
+              setPcmSent(pcmCountRef.current);
+              setMicLevel((v) => Math.max(v, 0.35));
+            },
+            onStart: () => setCaptionEngine("browser"),
+            onError: (message) => {
+              // Fall back to Whisper PCM if browser speech is blocked
+              console.warn("[browser-speech]", message);
+              if (!useBrowserSttRef.current) return;
+              useBrowserSttRef.current = false;
+              setCaptionEngine("whisper");
+              setError(message);
+            },
+          });
+          speechRef.current = speech;
+          const ok = speech.start();
+          if (ok) {
+            setCaptionEngine("browser");
+          } else {
+            useBrowserSttRef.current = false;
+            setCaptionEngine("whisper");
+          }
+        } else {
+          setCaptionEngine("whisper");
+        }
+
+        // Always also stream PCM for Whisper when browser speech is unavailable,
+        // or as backup energy meter. When browser STT is active, gateway ignores PCM.
         const mic = new BrowserMicSource(async () => stream);
         micSourceRef.current = mic;
         (async () => {
           try {
             for await (const chunk of mic.start()) {
               if (micLoopStop.current) break;
-              // Wait until room join so gateway has a pipeline
-              if (!joinedRef.current || !client.ready || mutedRef.current) continue;
-              client.sendPcm(chunk.pcm);
-              pcmCountRef.current += 1;
-              // Throttle React updates for level / counters
               const now = Date.now();
               if (now - levelTickRef.current > 200) {
                 levelTickRef.current = now;
                 setMicLevel(mic.peak);
+              }
+              if (!joinedRef.current || !client.ready || mutedRef.current) continue;
+              // Only push PCM to Whisper when not using browser speech
+              if (!useBrowserSttRef.current) {
+                client.sendPcm(chunk.pcm);
+                pcmCountRef.current += 1;
                 setPcmSent(pcmCountRef.current);
               }
             }
           } catch (err) {
             if (!cancelled) {
               console.error(err);
-              setError(
-                err instanceof Error ? err.message : "Mic capture for captions failed",
-              );
+              if (!useBrowserSttRef.current) {
+                setError(
+                  err instanceof Error
+                    ? err.message
+                    : "Mic capture for captions failed",
+                );
+              }
             }
           }
         })();
@@ -307,6 +356,8 @@ export function CallRoom({
       cancelled = true;
       micLoopStop.current = true;
       joinedRef.current = false;
+      speechRef.current?.stop();
+      speechRef.current = null;
       void micSourceRef.current?.stop();
       callRef.current?.close();
       client.leave();
@@ -318,6 +369,7 @@ export function CallRoom({
   useEffect(() => {
     if (!clientRef.current?.ready) return;
     clientRef.current.updateLangs(speakLang, captionLang);
+    speechRef.current?.setLanguage(speakLang);
     setCaptions([]);
     setError(null);
   }, [speakLang, captionLang]);
@@ -330,6 +382,7 @@ export function CallRoom({
     mutedRef.current = next;
     callRef.current?.setMicEnabled(!next);
     clientRef.current?.setMuted(next);
+    // Browser speech keeps running; gateway drops muted peer text/PCM
   };
 
   const toggleCam = () => {
@@ -452,19 +505,27 @@ export function CallRoom({
               <span
                 className="room-stat"
                 title={
-                  pcmSent > 0
-                    ? `Caption mic feed active (${pcmSent} chunks). Level ${(micLevel * 100).toFixed(0)}%`
-                    : "Caption mic feed not sending yet — wait for join or check Speech pill"
+                  captionEngine === "browser"
+                    ? `Captions via browser speech (${pcmSent} events). Speak in your Spoken language.`
+                    : captionEngine === "whisper"
+                      ? pcmSent > 0
+                        ? `Captions via Whisper PCM (${pcmSent} chunks). Level ${(micLevel * 100).toFixed(0)}%`
+                        : "Whisper path — waiting for mic audio"
+                      : "Starting caption engine…"
                 }
                 aria-label={
-                  pcmSent > 0
-                    ? `Mic level ${(micLevel * 100).toFixed(0)} percent`
-                    : "Mic feed idle"
+                  captionEngine === "browser"
+                    ? "Browser speech captions"
+                    : "Whisper captions"
                 }
               >
-                {pcmSent > 0
-                  ? `Mic ${Math.min(99, Math.round(micLevel * 100))}%`
-                  : "Mic —"}
+                {captionEngine === "browser"
+                  ? pcmSent > 0
+                    ? `Speech ${pcmSent}`
+                    : "Speech…"
+                  : pcmSent > 0
+                    ? `Mic ${Math.min(99, Math.round(micLevel * 100))}%`
+                    : "Mic —"}
               </span>
             </div>
           </div>

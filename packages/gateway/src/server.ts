@@ -324,6 +324,13 @@ async function handleJson(
       return;
     }
 
+    case "stt.text": {
+      if (!state.pipeline) return;
+      const text = typeof msg.text === "string" ? msg.text : "";
+      state.pipeline.pushText(text, Boolean(msg.isFinal));
+      return;
+    }
+
     case "audio.meta":
     case "audio.end":
       return;

@@ -62,6 +62,17 @@ export type ClientMessage =
       sampleRate?: number;
       ts?: number;
     }
+  /**
+   * Pre-transcribed speech from the browser (Web Speech API).
+   * Gateway skips Whisper and runs MT + caption broadcast.
+   */
+  | {
+      type: "stt.text";
+      text: string;
+      isFinal: boolean;
+      /** Client engine: "browser" | "whisper" etc. */
+      source?: string;
+    }
   | {
       type: "mute";
       muted: boolean;
