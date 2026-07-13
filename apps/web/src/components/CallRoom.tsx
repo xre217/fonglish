@@ -78,12 +78,19 @@ export function CallRoom({
   const [copyToast, setCopyToast] = useState(false);
   const [lanHost, setLanHost] = useState(() => loadShareHost());
   const [lanHint, setLanHint] = useState<string | null>(null);
+  /** Mic level 0–1 for caption-path diagnostics (STT feed, not WebRTC). */
+  const [micLevel, setMicLevel] = useState(0);
+  const [pcmSent, setPcmSent] = useState(0);
 
   const clientRef = useRef<CaptionClient | null>(null);
   const callRef = useRef<CallPeer | null>(null);
   const micSourceRef = useRef<BrowserMicSource | null>(null);
   const micLoopStop = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
+  const joinedRef = useRef(false);
+  const mutedRef = useRef(false);
+  const pcmCountRef = useRef(0);
+  const levelTickRef = useRef(0);
 
   const activeGateway = useMemo(() => resolveGatewayUrl(), []);
   const oneClick = canOneClickInvite(activeGateway);
@@ -196,6 +203,7 @@ export function CallRoom({
           },
           onClose: () => setStatus("Disconnected"),
           onWelcome: (peers, _peerId, _roomId, svc) => {
+            joinedRef.current = true;
             if (svc) setServices(svc);
             setStatus(peers.length ? "Connecting media…" : "Waiting for peer…");
             const other = peers[0] ?? null;
@@ -257,20 +265,30 @@ export function CallRoom({
           },
         });
 
-        // Stream mic PCM to gateway for STT (own mic only)
+        // Stream mic PCM to gateway for STT (own mic only). Independent of WebRTC A/V.
         const mic = new BrowserMicSource(async () => stream);
         micSourceRef.current = mic;
         (async () => {
           try {
             for await (const chunk of mic.start()) {
               if (micLoopStop.current) break;
+              // Wait until room join so gateway has a pipeline
+              if (!joinedRef.current || !client.ready || mutedRef.current) continue;
               client.sendPcm(chunk.pcm);
+              pcmCountRef.current += 1;
+              // Throttle React updates for level / counters
+              const now = Date.now();
+              if (now - levelTickRef.current > 200) {
+                levelTickRef.current = now;
+                setMicLevel(mic.peak);
+                setPcmSent(pcmCountRef.current);
+              }
             }
           } catch (err) {
             if (!cancelled) {
               console.error(err);
               setError(
-                err instanceof Error ? err.message : "Mic capture failed",
+                err instanceof Error ? err.message : "Mic capture for captions failed",
               );
             }
           }
@@ -288,6 +306,7 @@ export function CallRoom({
     return () => {
       cancelled = true;
       micLoopStop.current = true;
+      joinedRef.current = false;
       void micSourceRef.current?.stop();
       callRef.current?.close();
       client.leave();
@@ -308,6 +327,7 @@ export function CallRoom({
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
+    mutedRef.current = next;
     callRef.current?.setMicEnabled(!next);
     clientRef.current?.setMuted(next);
   };
@@ -428,6 +448,23 @@ export function CallRoom({
                 aria-label={mtMs != null ? `${mtMs} ms` : "No delay recorded"}
               >
                 {mtMs != null ? `${mtMs} ms` : "—"}
+              </span>
+              <span
+                className="room-stat"
+                title={
+                  pcmSent > 0
+                    ? `Caption mic feed active (${pcmSent} chunks). Level ${(micLevel * 100).toFixed(0)}%`
+                    : "Caption mic feed not sending yet — wait for join or check Speech pill"
+                }
+                aria-label={
+                  pcmSent > 0
+                    ? `Mic level ${(micLevel * 100).toFixed(0)} percent`
+                    : "Mic feed idle"
+                }
+              >
+                {pcmSent > 0
+                  ? `Mic ${Math.min(99, Math.round(micLevel * 100))}%`
+                  : "Mic —"}
               </span>
             </div>
           </div>

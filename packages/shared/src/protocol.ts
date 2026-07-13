@@ -54,6 +54,14 @@ export type ClientMessage =
   | {
       type: "audio.end";
     }
+  /** PCM16 LE mono as base64 — preferred over WS binary through some tunnels/proxies. */
+  | {
+      type: "audio.pcm";
+      /** base64-encoded PCM16 LE mono @ sampleRate (default 16 kHz) */
+      data: string;
+      sampleRate?: number;
+      ts?: number;
+    }
   | {
       type: "mute";
       muted: boolean;

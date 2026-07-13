@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import {
   isLangCode,
   type ClientMessage,
@@ -144,13 +144,27 @@ wss.on("connection", (ws) => {
   send(ws, { type: "services", services: currentServices() });
 
   ws.on("message", (raw, isBinary) => {
+    const buf = toBuffer(raw);
+    // Binary PCM (preferred fast path)
     if (isBinary) {
-      handleBinary(ws, state, raw as Buffer);
+      handleBinary(ws, state, buf);
+      return;
+    }
+    // Some proxies/tunnels deliver binary frames with isBinary=false.
+    // If it isn't valid JSON, treat as PCM when it looks like audio.
+    const asText = buf.toString("utf8");
+    const trimmed = asText.trimStart();
+    if (trimmed.length === 0 || trimmed[0] !== "{") {
+      if (buf.length >= 2 && buf.length % 2 === 0) {
+        handleBinary(ws, state, buf);
+        return;
+      }
+      send(ws, { type: "error", code: "bad_json", message: "Invalid JSON" });
       return;
     }
     let msg: ClientMessage;
     try {
-      msg = JSON.parse(raw.toString()) as ClientMessage;
+      msg = JSON.parse(asText) as ClientMessage;
     } catch {
       send(ws, { type: "error", code: "bad_json", message: "Invalid JSON" });
       return;
@@ -167,9 +181,26 @@ wss.on("connection", (ws) => {
   });
 });
 
+function toBuffer(raw: RawData): Buffer {
+  if (Buffer.isBuffer(raw)) return raw;
+  if (raw instanceof ArrayBuffer) return Buffer.from(raw);
+  if (Array.isArray(raw)) return Buffer.concat(raw);
+  return Buffer.from(raw as Uint8Array);
+}
+
 function handleBinary(_ws: WebSocket, state: SocketState, buf: Buffer): void {
   if (!state.pipeline) return;
   state.pipeline.pushPcm(buf);
+}
+
+function handlePcmBase64(state: SocketState, data: string): void {
+  if (!state.pipeline || !data) return;
+  try {
+    const buf = Buffer.from(data, "base64");
+    if (buf.length >= 2) state.pipeline.pushPcm(buf);
+  } catch {
+    /* ignore bad base64 */
+  }
 }
 
 async function handleJson(
@@ -285,6 +316,11 @@ async function handleJson(
       if (!peer) return;
       peer.muted = msg.muted;
       broadcast(room, { type: "peer_updated", peer: peerInfo(peer) });
+      return;
+    }
+
+    case "audio.pcm": {
+      handlePcmBase64(state, msg.data);
       return;
     }
 

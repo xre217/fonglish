@@ -119,10 +119,23 @@ export class CaptionClient {
     this.send({ type: "mute", muted });
   }
 
-  sendPcm(pcm: ArrayBuffer): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+  /**
+   * Send PCM16 mono to the gateway for STT.
+   * Uses base64 JSON by default — more reliable through Cloudflare/quick tunnels
+   * than raw binary frames from some browsers. Binary still accepted by gateway.
+   */
+  sendPcm(pcm: ArrayBuffer, opts?: { binary?: boolean }): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (opts?.binary) {
       this.ws.send(pcm);
+      return;
     }
+    this.send({
+      type: "audio.pcm",
+      data: arrayBufferToBase64(pcm),
+      sampleRate: 16000,
+      ts: Date.now(),
+    });
   }
 
   leave(): void {
@@ -148,4 +161,14 @@ export class CaptionClient {
       this.ws.send(JSON.stringify(msg));
     }
   }
+}
+
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }

@@ -28,11 +28,17 @@ export class SpeakerPipeline {
   private lastGoodByTarget = new Map<LangCode, string>();
   private previousFinalSource = "";
   private previousFinalByTarget = new Map<LangCode, string>();
+  /** Hold PCM until STT session is ready so the first utterance is not dropped. */
+  private pendingPcm: Buffer[] = [];
+  private static readonly MAX_PENDING = 80; // ~8s at 100ms chunks
 
   constructor(
     private room: Room,
     private peer: RoomPeer,
-  ) {}
+  ) {
+    // Start STT immediately on join so the first speech isn't lost to connect race.
+    void this.ensureStarted();
+  }
 
   async ensureStarted(): Promise<void> {
     if (this.closed) return;
@@ -61,6 +67,16 @@ export class SpeakerPipeline {
       try {
         await session.connect();
         this.stt = session;
+        // Flush any PCM that arrived while Whisper was connecting.
+        if (this.pendingPcm.length > 0) {
+          console.log(
+            `[stt] flushing ${this.pendingPcm.length} buffered PCM chunks for ${this.peer.displayName}`,
+          );
+          for (const chunk of this.pendingPcm) {
+            session.sendPcm(chunk);
+          }
+          this.pendingPcm = [];
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         send(this.peer.ws, {
@@ -80,9 +96,16 @@ export class SpeakerPipeline {
 
   pushPcm(pcm: Buffer): void {
     if (this.closed || this.peer.muted) return;
-    void this.ensureStarted().then(() => {
-      this.stt?.sendPcm(pcm);
-    });
+    if (this.stt) {
+      this.stt.sendPcm(pcm);
+      return;
+    }
+    // Buffer until session ready
+    this.pendingPcm.push(pcm);
+    if (this.pendingPcm.length > SpeakerPipeline.MAX_PENDING) {
+      this.pendingPcm.shift();
+    }
+    void this.ensureStarted();
   }
 
   updateLangs(speakLang: LangCode, captionLang: LangCode): void {

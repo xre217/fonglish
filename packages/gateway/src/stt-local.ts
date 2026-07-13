@@ -14,16 +14,20 @@ export type SttHandlers = {
   onReady?: () => void;
 };
 
-/** Energy threshold for speech detection (PCM16 RMS). */
-const SPEECH_RMS = Number(process.env.STT_SPEECH_RMS ?? 500);
+/**
+ * Energy threshold for speech detection (PCM16 RMS).
+ * Browser mics after AGC/noise-suppression often sit at 150–600 RMS when speaking;
+ * 500 was too high for many laptops and missed quiet speech entirely.
+ */
+const SPEECH_RMS = Number(process.env.STT_SPEECH_RMS ?? 120);
 /** Silence ms before finalizing an utterance. */
-const SILENCE_MS = Number(process.env.STT_SILENCE_MS ?? 700);
+const SILENCE_MS = Number(process.env.STT_SILENCE_MS ?? 600);
 /** Max buffered speech before forced finalize. */
 const MAX_UTTERANCE_MS = Number(process.env.STT_MAX_UTTERANCE_MS ?? 12_000);
 /** Min speech ms before we bother transcribing. */
-const MIN_SPEECH_MS = Number(process.env.STT_MIN_SPEECH_MS ?? 350);
+const MIN_SPEECH_MS = Number(process.env.STT_MIN_SPEECH_MS ?? 280);
 /** Interim re-transcribe interval while speaking. */
-const PARTIAL_INTERVAL_MS = Number(process.env.STT_PARTIAL_MS ?? 1600);
+const PARTIAL_INTERVAL_MS = Number(process.env.STT_PARTIAL_MS ?? 1400);
 
 export type SttLoadState = {
   status: "idle" | "loading" | "ready" | "error";
@@ -116,6 +120,11 @@ export class LocalSttSession {
   private lastPartialAt = 0;
   private transcribing = false;
   private pendingFinal = false;
+  /** Rolling stats for gateway diagnostics. */
+  private chunksIn = 0;
+  private peakRms = 0;
+  private lastStatsAt = 0;
+  private speechStarts = 0;
 
   constructor(
     private language: LangCode,
@@ -146,15 +155,32 @@ export class LocalSttSession {
 
     const ms = (buf.length / 2 / AUDIO.sampleRate) * 1000;
     const energy = rmsPcm16(buf);
+    this.chunksIn++;
+    if (energy > this.peakRms) this.peakRms = energy;
+
+    const now = Date.now();
+    if (now - this.lastStatsAt >= 5000) {
+      console.log(
+        `[stt] audio peer-lang=${this.language} chunks=${this.chunksIn} peakRms=${this.peakRms.toFixed(0)} threshold=${SPEECH_RMS} speaking=${this.speaking} starts=${this.speechStarts}`,
+      );
+      this.lastStatsAt = now;
+      this.peakRms = 0;
+      this.chunksIn = 0;
+    }
+
     const isSpeech = energy >= SPEECH_RMS;
 
     if (isSpeech) {
       if (!this.speaking) {
         this.speaking = true;
+        this.speechStarts++;
         this.speechChunks = [];
         this.speechMs = 0;
         this.silenceMs = 0;
         this.lastPartialAt = Date.now();
+        console.log(
+          `[stt] speech start rms=${energy.toFixed(0)} lang=${this.language}`,
+        );
       }
       this.speechChunks.push(buf);
       this.speechMs += ms;
@@ -234,11 +260,18 @@ export class LocalSttSession {
         .trim();
 
       if (text) {
+        console.log(
+          `[stt] ${final ? "final" : "partial"} (${(pcm.length / 2 / AUDIO.sampleRate).toFixed(1)}s): ${text.slice(0, 120)}`,
+        );
         this.handlers.onPartial({
           text,
           isFinal: final,
           speechFinal: final,
         });
+      } else if (final) {
+        console.log(
+          `[stt] final empty (${(pcm.length / 2 / AUDIO.sampleRate).toFixed(1)}s) — whisper returned blank`,
+        );
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

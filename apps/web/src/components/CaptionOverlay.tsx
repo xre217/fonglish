@@ -34,10 +34,14 @@ export function CaptionOverlay({
   }, [tailKey, tailText]);
 
   if (visible.length === 0) {
-    if (docked) return null;
     return (
-      <div className="captions empty" role="status">
-        <span className="muted">Captions appear as you speak.</span>
+      <div
+        className={`captions empty${docked ? " docked" : ""}`}
+        role="status"
+      >
+        <span className="muted">
+          Listening… speak clearly — captions appear here.
+        </span>
       </div>
     );
   }

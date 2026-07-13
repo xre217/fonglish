@@ -4,11 +4,14 @@ import type { AudioChunk, AudioSource } from "./types.js";
 /**
  * Captures mic audio, downsamples to 16 kHz PCM16 mono, yields ~100ms chunks.
  * Uses ScriptProcessor as a widely-supported fallback (AudioWorklet optional later).
+ *
+ * Clones the audio track so WebRTC and STT capture stay independent.
  */
 export class BrowserMicSource implements AudioSource {
   readonly kind = "browser-mic";
 
   private stream: MediaStream | null = null;
+  private ownedTracks: MediaStreamTrack[] = [];
   private ctx: AudioContext | null = null;
   private processor: ScriptProcessorNode | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
@@ -16,23 +19,47 @@ export class BrowserMicSource implements AudioSource {
   private queue: AudioChunk[] = [];
   private waiters: Array<(c: AudioChunk | null) => void> = [];
   private leftover = new Float32Array(0);
+  /** Peak abs sample in last emitted chunk (0–1). Useful for UI level meters. */
+  private lastPeak = 0;
+  private resumeTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly getStream: () => Promise<MediaStream>,
     private readonly targetRate = AUDIO.sampleRate,
   ) {}
 
+  /** Most recent peak amplitude (0–1) after a chunk is produced. */
+  get peak(): number {
+    return this.lastPeak;
+  }
+
   async *start(): AsyncGenerator<AudioChunk> {
     this.stopped = false;
-    this.stream = await this.getStream();
-    const track = this.stream.getAudioTracks()[0];
-    if (!track) throw new Error("No audio track on mic stream");
+    const original = await this.getStream();
+    const audioTracks = original.getAudioTracks();
+    if (audioTracks.length === 0) {
+      throw new Error("No audio track on mic stream");
+    }
 
-    this.ctx = new AudioContext();
-    // Prefer running state for capture
+    // Clone tracks so RTCPeerConnection mutations don't starve STT capture.
+    this.ownedTracks = audioTracks.map((t) => t.clone());
+    this.stream = new MediaStream(this.ownedTracks);
+
+    // Prefer 16 kHz context when the browser allows it (fewer resample artifacts).
+    try {
+      this.ctx = new AudioContext({ sampleRate: this.targetRate });
+    } catch {
+      this.ctx = new AudioContext();
+    }
     if (this.ctx.state === "suspended") {
       await this.ctx.resume();
     }
+    // Keep context running if the tab blurs (common caption drop cause).
+    this.resumeTimer = setInterval(() => {
+      if (this.ctx?.state === "suspended") {
+        void this.ctx.resume();
+      }
+    }, 1500);
 
     this.sourceNode = this.ctx.createMediaStreamSource(this.stream);
     // 4096 frames ≈ buffer; we re-chunk after resample
@@ -40,7 +67,17 @@ export class BrowserMicSource implements AudioSource {
     this.processor.onaudioprocess = (ev) => {
       if (this.stopped) return;
       const input = ev.inputBuffer.getChannelData(0);
-      const resampled = this.resample(input, this.ctx!.sampleRate, this.targetRate);
+      let peak = 0;
+      for (let i = 0; i < input.length; i++) {
+        const a = Math.abs(input[i]!);
+        if (a > peak) peak = a;
+      }
+      this.lastPeak = peak;
+      const resampled = this.resample(
+        input,
+        this.ctx!.sampleRate,
+        this.targetRate,
+      );
       this.enqueuePcm(resampled);
     };
 
@@ -64,6 +101,10 @@ export class BrowserMicSource implements AudioSource {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.resumeTimer) {
+      clearInterval(this.resumeTimer);
+      this.resumeTimer = null;
+    }
     for (const w of this.waiters) w(null);
     this.waiters = [];
     this.queue = [];
@@ -77,11 +118,19 @@ export class BrowserMicSource implements AudioSource {
     this.processor = null;
     this.sourceNode = null;
 
+    for (const t of this.ownedTracks) {
+      try {
+        t.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.ownedTracks = [];
+
     if (this.ctx) {
       await this.ctx.close().catch(() => undefined);
       this.ctx = null;
     }
-    // Do not stop the MediaStream tracks — caller owns the call stream.
     this.stream = null;
   }
 
