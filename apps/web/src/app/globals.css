@@ -631,8 +631,8 @@ code {
   aspect-ratio: 4 / 3;
   height: auto;
   border-radius: var(--radius-sm);
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   z-index: 2;
 }
 
@@ -664,59 +664,42 @@ code {
   max-height: 38%;
   min-height: 0;
   padding: 0.45rem 0.6rem 0.55rem;
-  background: rgba(2, 6, 16, 0.88);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(8, 12, 16, 0.88);
+  border-color: rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(10px);
   gap: 0.35rem;
 }
 
-.captions.docked .caption-line {
-  max-width: none;
-  padding: 0.4rem 0.55rem;
-}
-
-.captions.docked .caption-line.older {
-  opacity: 0.72;
-  padding: 0.3rem 0.5rem;
-}
-
-.captions.docked .caption-line.older .caption-text {
-  font-size: 0.88rem;
-  font-weight: 500;
-}
-
 .captions.docked .caption-line.latest.partial {
   border-style: solid;
-  border-color: rgba(110, 168, 255, 0.45);
-  background: rgba(110, 168, 255, 0.1);
+  border-color: rgba(184, 149, 106, 0.35);
+  background: rgba(184, 149, 106, 0.08);
 }
 
 .captions.docked .caption-line.latest.final {
-  background: rgba(0, 0, 0, 0.45);
-  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .captions.docked .caption-text {
-  font-size: clamp(0.95rem, 2.8vw, 1.12rem);
-  text-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.9),
-    0 0 12px rgba(0, 0, 0, 0.55);
+  font-size: clamp(0.95rem, 2.8vw, 1.1rem);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
 }
 
 .captions.docked .caption-line.latest .caption-text {
-  font-size: clamp(1rem, 3.2vw, 1.2rem);
-  font-weight: 700;
-  color: #ffffff;
+  font-size: clamp(1rem, 3.2vw, 1.18rem);
+  font-weight: 500;
+  color: #f2f4f7;
 }
 
 .captions.docked .caption-line.partial .caption-text {
   font-style: normal;
-  color: #eef2ff;
+  color: #e8ebef;
 }
 
 .captions.docked .caption-original {
-  font-size: 0.8rem;
-  color: #c5d0ef;
+  font-size: 0.78rem;
+  color: #9aa3b0;
 }
 
 .captions.empty {
@@ -763,26 +746,20 @@ code {
 }
 
 .caption-line.remote {
-  border-left: 3px solid var(--accent);
+  border-left: 2px solid var(--accent-2);
 }
 
 .caption-line.self {
-  border-left: 3px solid var(--accent-2);
+  border-left: 2px solid var(--accent);
 }
 
-.caption-meta {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  margin-bottom: 0.2rem;
-}
-
-.caption-speaker {
-  font-size: 0.72rem;
-  text-transform: uppercase;
+.caption-speaker-line {
+  margin: 0 0 0.15rem;
+  font-size: 0.68rem;
+  font-weight: 500;
   letter-spacing: 0.06em;
-  color: #b8c4e8;
-  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .caption-state {
@@ -818,20 +795,21 @@ code {
 
 .caption-text {
   margin: 0;
-  font-size: 1.08rem;
-  line-height: 1.4;
-  font-weight: 600;
-  color: #f8faff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  font-size: 1.05rem;
+  line-height: 1.45;
+  font-weight: 500;
+  color: #eceff3;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   min-height: 1.4em;
   word-break: break-word;
 }
 
 .caption-original {
-  margin: 0.25rem 0 0;
-  font-size: 0.86rem;
-  line-height: 1.35;
-  color: #a8b5d8;
+  margin: 0.2rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  color: #8b95a5;
+  font-style: italic;
 }
 
 .caption-line.partial .caption-original {
