@@ -1,24 +1,23 @@
 import type { SignalPayload } from "@fonglish/shared";
 
 /**
- * STUN + free public TURN (Metered openrelay) so Mac↔Windows media works
- * across NATs — STUN alone often fails for remote video.
+ * STUN + multiple free TURN relays so Mac↔Windows media works across NATs.
+ * Host/srflx alone often fails (mDNS privacy, symmetric NAT, guest Wi‑Fi).
  */
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:global.stun.twilio.com:3478" },
+  // Metered free open relay (public demo credentials — still widely used)
   {
-    urls: "turn:openrelay.metered.ca:80",
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443",
-    username: "openrelayproject",
-    credential: "openrelayproject",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    urls: [
+      "turn:openrelay.metered.ca:80",
+      "turn:openrelay.metered.ca:80?transport=tcp",
+      "turn:openrelay.metered.ca:443",
+      "turns:openrelay.metered.ca:443?transport=tcp",
+      "turn:openrelay.metered.ca:443?transport=tcp",
+    ],
     username: "openrelayproject",
     credential: "openrelayproject",
   },
@@ -29,6 +28,8 @@ export type PeerConnectionHandlers = {
   onSignal: (payload: SignalPayload) => void;
   onConnectionState?: (state: RTCPeerConnectionState) => void;
   onIceConnectionState?: (state: RTCIceConnectionState) => void;
+  onIceGatheringState?: (state: RTCIceGatheringState) => void;
+  onDiagnostic?: (line: string) => void;
 };
 
 /**
@@ -40,6 +41,11 @@ export class CallPeer {
   private ignoreOffer = false;
   private isPolite: boolean;
   private remoteStream: MediaStream | null = null;
+  /** ICE that arrived before remote description — must not drop these. */
+  private pendingIce: RTCIceCandidateInit[] = [];
+  private closed = false;
+  private iceRestartTimer: ReturnType<typeof setTimeout> | null = null;
+  private remoteDescSet = false;
 
   constructor(
     private readonly localStream: MediaStream,
@@ -49,30 +55,43 @@ export class CallPeer {
     this.isPolite = opts.polite;
     this.pc = new RTCPeerConnection({
       iceServers: ICE_SERVERS,
-      iceCandidatePoolSize: 4,
+      iceCandidatePoolSize: 8,
+      bundlePolicy: "max-bundle",
+      rtcpMuxPolicy: "require",
     });
 
     for (const track of localStream.getTracks()) {
       this.pc.addTrack(track, localStream);
+      this.diag(`local ${track.kind} track ${track.label || track.id} readyState=${track.readyState}`);
     }
 
     this.pc.ontrack = (ev) => {
-      // Some browsers omit ev.streams — build stream from track
-      let stream = ev.streams[0] ?? null;
-      if (!stream) {
-        if (!this.remoteStream) this.remoteStream = new MediaStream();
-        stream = this.remoteStream;
-        if (!stream.getTracks().some((t) => t.id === ev.track.id)) {
-          stream.addTrack(ev.track);
+      this.diag(`ontrack ${ev.track.kind} streams=${ev.streams.length}`);
+      // Always merge into one remote MediaStream so late audio/video both appear
+      if (!this.remoteStream) this.remoteStream = new MediaStream();
+      const stream = this.remoteStream;
+      if (!stream.getTracks().some((t) => t.id === ev.track.id)) {
+        stream.addTrack(ev.track);
+      }
+      // Also attach any tracks from browser-provided streams
+      for (const s of ev.streams) {
+        for (const t of s.getTracks()) {
+          if (!stream.getTracks().some((x) => x.id === t.id)) {
+            stream.addTrack(t);
+          }
         }
-      } else {
-        this.remoteStream = stream;
       }
       this.handlers.onRemoteStream(stream);
     };
 
     this.pc.onicecandidate = (ev) => {
-      if (!ev.candidate) return; // end-of-candidates — skip null payload
+      if (!ev.candidate) {
+        this.diag("ICE gathering complete");
+        return;
+      }
+      const c = ev.candidate.candidate;
+      const typ = / typ (\w+)/.exec(c)?.[1] ?? "?";
+      this.diag(`ICE local candidate typ=${typ}`);
       this.handlers.onSignal({
         kind: "ice",
         candidate: {
@@ -85,22 +104,89 @@ export class CallPeer {
     };
 
     this.pc.onconnectionstatechange = () => {
-      this.handlers.onConnectionState?.(this.pc.connectionState);
+      const s = this.pc.connectionState;
+      this.diag(`connectionState=${s}`);
+      this.handlers.onConnectionState?.(s);
+      if (s === "failed") {
+        this.scheduleIceRestart();
+      }
     };
 
     this.pc.oniceconnectionstatechange = () => {
-      this.handlers.onIceConnectionState?.(this.pc.iceConnectionState);
+      const s = this.pc.iceConnectionState;
+      this.diag(`iceConnectionState=${s}`);
+      this.handlers.onIceConnectionState?.(s);
+      if (s === "failed") {
+        this.scheduleIceRestart();
+      }
+    };
+
+    this.pc.onicegatheringstatechange = () => {
+      this.handlers.onIceGatheringState?.(this.pc.iceGatheringState);
+    };
+
+    // Helpful when tracks are added later
+    this.pc.onnegotiationneeded = () => {
+      if (this.closed || this.isPolite) return;
+      if (this.pc.signalingState !== "stable") return;
+      void this.createOffer().catch((e) =>
+        this.diag(`negotiationneeded failed: ${String(e)}`),
+      );
     };
   }
 
-  async createOffer(): Promise<void> {
+  private diag(line: string): void {
+    console.info(`[webrtc] ${line}`);
+    this.handlers.onDiagnostic?.(line);
+  }
+
+  private scheduleIceRestart(): void {
+    if (this.closed || this.iceRestartTimer) return;
+    this.diag("scheduling ICE restart in 1.5s");
+    this.iceRestartTimer = setTimeout(() => {
+      this.iceRestartTimer = null;
+      void this.restartIce();
+    }, 1500);
+  }
+
+  /** Public retry for UI button. */
+  async restartIce(): Promise<void> {
+    if (this.closed) return;
+    try {
+      this.diag("ICE restart…");
+      try {
+        this.pc.restartIce?.();
+      } catch {
+        /* older browsers */
+      }
+      // Either side can send an iceRestart offer when stable
+      if (this.pc.signalingState === "stable") {
+        await this.createOffer({ iceRestart: true });
+      } else {
+        this.diag(`skip offer restart (signaling=${this.pc.signalingState})`);
+      }
+    } catch (err) {
+      this.diag(
+        `ICE restart error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async createOffer(opts?: { iceRestart?: boolean }): Promise<void> {
+    if (this.closed) return;
     try {
       this.makingOffer = true;
       const offer = await this.pc.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
+        iceRestart: opts?.iceRestart === true,
       });
+      // Guard against glare
+      if (this.pc.signalingState !== "stable" && !opts?.iceRestart) {
+        // still allow if we own the offer slot
+      }
       await this.pc.setLocalDescription(offer);
+      this.diag(`sent offer iceRestart=${Boolean(opts?.iceRestart)}`);
       this.handlers.onSignal({
         kind: "offer",
         sdp: this.pc.localDescription!.sdp,
@@ -111,16 +197,23 @@ export class CallPeer {
   }
 
   async handleSignal(payload: SignalPayload): Promise<void> {
+    if (this.closed) return;
+
     if (payload.kind === "offer") {
       const offerCollision =
         this.makingOffer || this.pc.signalingState !== "stable";
       this.ignoreOffer = !this.isPolite && offerCollision;
-      if (this.ignoreOffer) return;
+      if (this.ignoreOffer) {
+        this.diag("ignoring offer (glare, impolite)");
+        return;
+      }
 
+      this.diag("got offer → answer");
       await this.pc.setRemoteDescription({
         type: "offer",
         sdp: payload.sdp,
       });
+      await this.flushIce();
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
       this.handlers.onSignal({
@@ -131,22 +224,57 @@ export class CallPeer {
     }
 
     if (payload.kind === "answer") {
-      if (this.pc.signalingState === "stable") return;
+      if (this.pc.signalingState === "stable") {
+        this.diag("skip answer (already stable)");
+        return;
+      }
+      this.diag("got answer");
       await this.pc.setRemoteDescription({
         type: "answer",
         sdp: payload.sdp,
       });
+      await this.flushIce();
       return;
     }
 
     if (payload.kind === "ice") {
       if (!payload.candidate?.candidate) return;
+      const init: RTCIceCandidateInit = {
+        candidate: payload.candidate.candidate,
+        sdpMid: payload.candidate.sdpMid ?? undefined,
+        sdpMLineIndex: payload.candidate.sdpMLineIndex ?? undefined,
+        usernameFragment: payload.candidate.usernameFragment ?? undefined,
+      };
+      if (!this.remoteDescSet && !this.pc.remoteDescription) {
+        this.pendingIce.push(init);
+        this.diag(`queued remote ICE (${this.pendingIce.length})`);
+        return;
+      }
       try {
-        await this.pc.addIceCandidate(payload.candidate);
+        await this.pc.addIceCandidate(init);
       } catch (err) {
-        if (!this.ignoreOffer) throw err;
+        if (!this.ignoreOffer) {
+          this.diag(
+            `addIceCandidate failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
     }
+  }
+
+  private async flushIce(): Promise<void> {
+    this.remoteDescSet = true;
+    const batch = this.pendingIce.splice(0, this.pendingIce.length);
+    for (const c of batch) {
+      try {
+        await this.pc.addIceCandidate(c);
+      } catch (err) {
+        this.diag(
+          `flush ICE failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (batch.length) this.diag(`flushed ${batch.length} queued ICE candidates`);
   }
 
   setMicEnabled(enabled: boolean): void {
@@ -161,7 +289,29 @@ export class CallPeer {
     }
   }
 
+  getStatsSummary(): Promise<string> {
+    return this.pc.getStats().then((stats) => {
+      let pairs = 0;
+      let selected = "";
+      stats.forEach((r) => {
+        if (r.type === "candidate-pair" && "state" in r) {
+          pairs++;
+          const row = r as RTCIceCandidatePairStats;
+          if (row.state === "succeeded" || row.nominated) {
+            selected = `${row.state} nominated=${row.nominated}`;
+          }
+        }
+      });
+      return `pairs=${pairs} ${selected || "no-nominated"} ice=${this.pc.iceConnectionState} conn=${this.pc.connectionState}`;
+    });
+  }
+
   close(): void {
+    this.closed = true;
+    if (this.iceRestartTimer) {
+      clearTimeout(this.iceRestartTimer);
+      this.iceRestartTimer = null;
+    }
     try {
       this.pc.close();
     } catch {
@@ -212,7 +362,6 @@ export async function getMediaStream(opts?: {
   const wantAudio = opts?.audio !== false;
 
   // Progressive constraints — Windows desktops often fail with facingMode: "user"
-  // ("Could not start video source") when no front-facing camera is labeled.
   const attempts: MediaStreamConstraints[] = [];
   if (wantVideo && wantAudio) {
     attempts.push({
@@ -231,6 +380,8 @@ export async function getMediaStream(opts?: {
       audio: true,
       video: { width: { ideal: 640 }, height: { ideal: 480 } },
     });
+    // Ultra-simple last video attempt
+    attempts.push({ audio: true, video: { facingMode: undefined as unknown as undefined } });
   } else if (wantVideo) {
     attempts.push({ video: true });
   } else {
@@ -244,8 +395,23 @@ export async function getMediaStream(opts?: {
     attempts.push({ audio: true });
   }
 
+  // Clean attempts — remove invalid constraint object
+  const cleanAttempts = attempts.filter((a) => {
+    if (a.video && typeof a.video === "object") {
+      const v = a.video as Record<string, unknown>;
+      if ("facingMode" in v && v.facingMode === undefined) {
+        return false;
+      }
+    }
+    return true;
+  });
+  // Always end with simplest
+  if (wantVideo && wantAudio) {
+    cleanAttempts.push({ audio: true, video: true });
+  }
+
   let lastErr: unknown;
-  for (const constraints of attempts) {
+  for (const constraints of cleanAttempts) {
     try {
       return await devices.getUserMedia(constraints);
     } catch (err) {

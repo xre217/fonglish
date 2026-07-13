@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Props = {
   localStream: MediaStream | null;
@@ -10,6 +10,9 @@ type Props = {
   muted: boolean;
   camOff: boolean;
   waitingForPeer?: boolean;
+  /** Show a strong "tap for sound" affordance until remote audio unlocks. */
+  needClickToPlay?: boolean;
+  onUserPlay?: () => void;
 };
 
 function VideoTile({
@@ -20,6 +23,9 @@ function VideoTile({
   mirror,
   placeholder,
   pip,
+  forcePlayToken,
+  showPlayHint,
+  onPlayClick,
 }: {
   stream: MediaStream | null;
   label: string;
@@ -28,40 +34,60 @@ function VideoTile({
   mirror?: boolean;
   placeholder: string;
   pip?: boolean;
+  forcePlayToken?: number;
+  showPlayHint?: boolean;
+  onPlayClick?: () => void;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const [blocked, setBlocked] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.srcObject = stream;
-    // Remote (unmuted) video often needs an explicit play() — autoplay policies
-    if (stream) {
-      const p = el.play();
-      if (p !== undefined) {
-        void p.catch(() => {
-          /* user gesture may be required; click-to-play overlay below */
-        });
-      }
+    if (!stream) {
+      setBlocked(false);
+      return;
     }
-  }, [stream]);
+    el.volume = 1;
+    const p = el.play();
+    if (p !== undefined) {
+      void p
+        .then(() => setBlocked(false))
+        .catch(() => setBlocked(true));
+    }
+  }, [stream, forcePlayToken, muted]);
 
   const tryPlay = () => {
     const el = ref.current;
     if (!el) return;
-    void el.play().catch(() => undefined);
+    el.muted = Boolean(muted);
+    el.volume = 1;
+    void el
+      .play()
+      .then(() => {
+        setBlocked(false);
+        onPlayClick?.();
+      })
+      .catch(() => setBlocked(true));
   };
+
+  const needsHint = Boolean(stream && !muted && (blocked || showPlayHint));
 
   return (
     <div
-      className={`video-tile${pip ? " pip" : ""}`}
+      className={`video-tile${pip ? " pip" : ""}${needsHint ? " needs-play" : ""}`}
       onClick={tryPlay}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") tryPlay();
       }}
       role={stream && !muted ? "button" : undefined}
       tabIndex={stream && !muted ? 0 : undefined}
-      title={stream && !muted ? "Click if video is black (autoplay)" : undefined}
+      title={
+        stream && !muted
+          ? "Click to play video/audio if black or silent"
+          : undefined
+      }
     >
       <video
         ref={ref}
@@ -74,6 +100,11 @@ function VideoTile({
       {!stream && (
         <div className="placeholder" role="status" aria-live="polite">
           {placeholder}
+        </div>
+      )}
+      {needsHint && (
+        <div className="play-gate" role="status">
+          <span className="play-gate-btn">Tap for video &amp; sound</span>
         </div>
       )}
       <div className="video-label" aria-hidden>
@@ -91,10 +122,13 @@ export function VideoStage({
   muted,
   camOff,
   waitingForPeer = false,
+  needClickToPlay = false,
+  onUserPlay,
 }: Props) {
+  const [playToken, setPlayToken] = useState(0);
   const remotePlaceholder = waitingForPeer
     ? "Waiting for your guest"
-    : "Connecting…";
+    : "Connecting media…";
 
   const localLabel = [
     localName,
@@ -112,6 +146,13 @@ export function VideoStage({
     .filter(Boolean)
     .join(", ");
 
+  const remoteTrackInfo = remoteStream
+    ? [
+        remoteStream.getVideoTracks().length ? "video" : "no-video",
+        remoteStream.getAudioTracks().length ? "audio" : "no-audio",
+      ].join(" · ")
+    : null;
+
   return (
     <div
       className={[
@@ -126,9 +167,19 @@ export function VideoStage({
     >
       <VideoTile
         stream={remoteStream}
-        label={remoteName ?? "Participant"}
+        label={
+          remoteTrackInfo
+            ? `${remoteName ?? "Participant"} · ${remoteTrackInfo}`
+            : (remoteName ?? "Participant")
+        }
         ariaLabel={`${remoteName ?? "Participant"} video`}
         placeholder={remotePlaceholder}
+        forcePlayToken={playToken}
+        showPlayHint={needClickToPlay && Boolean(remoteStream)}
+        onPlayClick={() => {
+          setPlayToken((n) => n + 1);
+          onUserPlay?.();
+        }}
       />
       <VideoTile
         stream={camOff ? null : localStream}

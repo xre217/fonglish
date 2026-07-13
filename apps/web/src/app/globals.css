@@ -1102,6 +1102,33 @@ code {
   height: 100%;
 }
 
+.video-tile.needs-play {
+  cursor: pointer;
+}
+
+.play-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 10, 16, 0.55);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.play-gate-btn {
+  pointer-events: none;
+  padding: 0.75rem 1.15rem;
+  border-radius: 999px;
+  background: rgba(196, 165, 116, 0.92);
+  color: #12151a;
+  font-weight: 650;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+}
+
 .video-tile video {
   width: 100%;
   height: 100%;

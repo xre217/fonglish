@@ -11,10 +11,6 @@ import {
 } from "@fonglish/shared";
 import { CaptionClient } from "@/lib/caption-client";
 import {
-  BrowserSpeechSource,
-  browserSpeechSupported,
-} from "@/lib/browser-speech";
-import {
   buildLanGatewayUrl,
   buildOneClickInvite,
   buildShareUrl,
@@ -85,21 +81,19 @@ export function CallRoom({
   /** Mic level 0–1 for caption-path diagnostics (STT feed, not WebRTC). */
   const [micLevel, setMicLevel] = useState(0);
   const [pcmSent, setPcmSent] = useState(0);
-  const [captionEngine, setCaptionEngine] = useState<
-    "browser" | "whisper" | "starting"
-  >("starting");
+  const [mediaDiag, setMediaDiag] = useState<string>("");
+  const [needClickToPlay, setNeedClickToPlay] = useState(true);
+  const [iceState, setIceState] = useState<string>("");
 
   const clientRef = useRef<CaptionClient | null>(null);
   const callRef = useRef<CallPeer | null>(null);
   const micSourceRef = useRef<BrowserMicSource | null>(null);
-  const speechRef = useRef<BrowserSpeechSource | null>(null);
   const micLoopStop = useRef(false);
   const streamRef = useRef<MediaStream | null>(null);
   const joinedRef = useRef(false);
   const mutedRef = useRef(false);
   const pcmCountRef = useRef(0);
   const levelTickRef = useRef(0);
-  const useBrowserSttRef = useRef(false);
 
   const activeGateway = useMemo(() => resolveGatewayUrl(), []);
   const oneClick = canOneClickInvite(activeGateway);
@@ -150,29 +144,37 @@ export function CallRoom({
       const call = new CallPeer(
         local,
         {
-          onRemoteStream: (s) => setRemoteStream(s),
+          onRemoteStream: (s) => {
+            setRemoteStream(new MediaStream(s.getTracks()));
+            setNeedClickToPlay(true);
+            setStatus("Media arrived — tap video for sound");
+          },
           onSignal: (payload) => client.signal(remote.peerId, payload),
           onConnectionState: (state) => {
             if (state === "connected") {
-              setStatus("Connected");
+              setStatus("Connected — tap video if silent");
               setError(null);
             }
             if (state === "failed") {
               setError(
-                "Video link failed (WebRTC). Both must use the same room + same public gateway. Click the main video once if it’s black (autoplay). Check firewall / try again.",
+                "Video link failed (WebRTC). Same room + same wss gateway on both PCs? Tap Retry media. Also click the main video once (autoplay).",
               );
             }
             if (state === "disconnected") setStatus("Reconnecting…");
             if (state === "connecting") setStatus("Connecting media…");
           },
           onIceConnectionState: (state) => {
+            setIceState(state);
             if (state === "failed" || state === "disconnected") {
               setStatus(`Network: ${state}`);
             }
             if (state === "connected" || state === "completed") {
-              setStatus("Connected");
+              setStatus("Connected — tap video if silent");
             }
             if (state === "checking") setStatus("Finding network path…");
+          },
+          onDiagnostic: (line) => {
+            setMediaDiag(line);
           },
         },
         { polite },
@@ -274,14 +276,8 @@ export function CallRoom({
           },
         });
 
-        // Caption STT strategy (Windows-safe):
-        // 1) Always stream PCM → Mac Whisper (local). Never gate this on browser speech.
-        // 2) Optionally layer Chrome Web Speech — only "wins" after it produces text.
-        //    Starting SpeechRecognition exclusively on Windows often steals the mic
-        //    and yields nothing (network / audio-capture errors).
-        useBrowserSttRef.current = false;
-        setCaptionEngine("whisper");
-
+        // Captions: PCM → Mac Whisper only (no browser SpeechRecognition — it
+        // steals the Windows mic and breaks WebRTC see/hear).
         const mic = new BrowserMicSource(async () => stream);
         micSourceRef.current = mic;
         (async () => {
@@ -294,12 +290,9 @@ export function CallRoom({
                 setMicLevel(mic.peak);
               }
               if (!joinedRef.current || !client.ready || mutedRef.current) continue;
-              // Keep feeding Whisper unless browser speech has proven it works
-              if (!useBrowserSttRef.current) {
-                client.sendPcm(chunk.pcm);
-                pcmCountRef.current += 1;
-                setPcmSent(pcmCountRef.current);
-              }
+              client.sendPcm(chunk.pcm);
+              pcmCountRef.current += 1;
+              setPcmSent(pcmCountRef.current);
             }
           } catch (err) {
             if (!cancelled) {
@@ -312,46 +305,6 @@ export function CallRoom({
             }
           }
         })();
-
-        // Delay browser speech so getUserMedia / WebRTC can claim the mic first.
-        // Only switch off Whisper after the first successful transcript.
-        if (browserSpeechSupported()) {
-          window.setTimeout(() => {
-            if (cancelled || micLoopStop.current) return;
-            const speech = new BrowserSpeechSource(initialSpeak, {
-              onText: (text, isFinal) => {
-                if (!joinedRef.current || !client.ready || mutedRef.current) {
-                  return;
-                }
-                // First success → prefer browser path (gateway will too)
-                if (!useBrowserSttRef.current) {
-                  useBrowserSttRef.current = true;
-                  setCaptionEngine("browser");
-                  console.info("[captions] browser speech active");
-                }
-                client.sendSttText(text, isFinal, "browser");
-                pcmCountRef.current += 1;
-                setPcmSent(pcmCountRef.current);
-                setMicLevel((v) => Math.max(v, 0.35));
-              },
-              onStart: () => {
-                /* stay on whisper until first text */
-              },
-              onError: (message) => {
-                // Stay on Whisper — do not block PCM
-                console.warn("[browser-speech]", message);
-                useBrowserSttRef.current = false;
-                setCaptionEngine("whisper");
-                // Don't surface soft network errors as fatal banners
-                if (/permission|blocked|not-allowed/i.test(message)) {
-                  setError(message);
-                }
-              },
-            });
-            speechRef.current = speech;
-            speech.start();
-          }, 1200);
-        }
       } catch (err) {
         setError(
           err instanceof Error
@@ -366,8 +319,6 @@ export function CallRoom({
       cancelled = true;
       micLoopStop.current = true;
       joinedRef.current = false;
-      speechRef.current?.stop();
-      speechRef.current = null;
       void micSourceRef.current?.stop();
       callRef.current?.close();
       client.leave();
@@ -379,12 +330,18 @@ export function CallRoom({
   useEffect(() => {
     if (!clientRef.current?.ready) return;
     clientRef.current.updateLangs(speakLang, captionLang);
-    speechRef.current?.setLanguage(speakLang);
     setCaptions([]);
     setError(null);
   }, [speakLang, captionLang]);
 
   const waitingForPeer = !remotePeer;
+
+  const retryMedia = () => {
+    setError(null);
+    setNeedClickToPlay(true);
+    setStatus("Retrying media…");
+    void callRef.current?.restartIce();
+  };
 
   const toggleMute = () => {
     const next = !muted;
@@ -392,7 +349,6 @@ export function CallRoom({
     mutedRef.current = next;
     callRef.current?.setMicEnabled(!next);
     clientRef.current?.setMuted(next);
-    // Browser speech keeps running; gateway drops muted peer text/PCM
   };
 
   const toggleCam = () => {
@@ -515,28 +471,23 @@ export function CallRoom({
               <span
                 className="room-stat"
                 title={
-                  captionEngine === "browser"
-                    ? `Captions via browser speech (${pcmSent} events). Speak in your Spoken language.`
-                    : captionEngine === "whisper"
-                      ? pcmSent > 0
-                        ? `Captions via Whisper PCM (${pcmSent} chunks). Level ${(micLevel * 100).toFixed(0)}%`
-                        : "Whisper path — waiting for mic audio"
-                      : "Starting caption engine…"
-                }
-                aria-label={
-                  captionEngine === "browser"
-                    ? "Browser speech captions"
-                    : "Whisper captions"
+                  pcmSent > 0
+                    ? `Caption mic → gateway (${pcmSent} chunks). Level ${(micLevel * 100).toFixed(0)}%`
+                    : "Caption mic feed idle"
                 }
               >
-                {captionEngine === "browser"
-                  ? pcmSent > 0
-                    ? `Speech ${pcmSent}`
-                    : "Speech…"
-                  : pcmSent > 0
-                    ? `Mic ${Math.min(99, Math.round(micLevel * 100))}%`
-                    : "Mic —"}
+                {pcmSent > 0
+                  ? `Mic ${Math.min(99, Math.round(micLevel * 100))}%`
+                  : "Mic —"}
               </span>
+              {iceState && (
+                <span
+                  className="room-stat"
+                  title={mediaDiag || `ICE ${iceState}`}
+                >
+                  ICE {iceState}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -692,6 +643,8 @@ export function CallRoom({
           muted={muted}
           camOff={camOff}
           waitingForPeer={waitingForPeer}
+          needClickToPlay={needClickToPlay}
+          onUserPlay={() => setNeedClickToPlay(false)}
         />
 
         <div className="caption-dock">
@@ -704,6 +657,19 @@ export function CallRoom({
         </div>
       </div>
 
+      {remotePeer && (
+        <div className="banner info" role="status">
+          <strong>Can&apos;t see or hear?</strong>{" "}
+          Click the big video once (browsers block sound until you tap). Then{" "}
+          <button type="button" className="btn btn-secondary btn-compact" onClick={retryMedia}>
+            Retry media
+          </button>
+          {iceState ? (
+            <span className="muted"> · ICE: {iceState}{mediaDiag ? ` · ${mediaDiag}` : ""}</span>
+          ) : null}
+        </div>
+      )}
+
       <div className="toolbar card" role="toolbar" aria-label="Call controls">
         <div className="toolbar-controls">
           <button
@@ -714,6 +680,14 @@ export function CallRoom({
             aria-label={muted ? "Unmute microphone" : "Mute microphone"}
           >
             {muted ? "Unmute" : "Mute"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-media"
+            onClick={retryMedia}
+            aria-label="Retry video and audio connection"
+          >
+            Retry media
           </button>
           <button
             type="button"
